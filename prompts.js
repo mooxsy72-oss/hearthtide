@@ -2,7 +2,7 @@
 // Весь инджект — на английском. Значения для инфоблока ИИ пишет на выбранном языке.
 
 import { isoOf, fromDayNum, easterJulian, easterGregorian } from './dates.js';
-import { hasGifts, isIntimate, openEvent, dateHoursLeft, giftJoint, charGiftOf, activeOccasions, occTier, preparingNow } from './calendar.js';
+import { hasGifts, isIntimate, openEvent, dateHoursLeft, giftJoint, charGiftOf, activeOccasions, occTier, preparingNow, pushable } from './calendar.js';
 import { openSteps, goalOpen, DATE_OPEN, DATE_MOMENTS } from './romance.js';
 import { ageOf, relLevel } from './cast.js';
 import { ICON_WORDS } from './icons.js';
@@ -49,10 +49,11 @@ function inviteLines(ctx) {
     // принятые и ещё не наступившие — модель знает дату и что это впереди
     const cur = (phase.kind === 'prep' || phase.kind === 'today') ? phase.h?.id : null;
     const ahead = (ctx.acceptedAhead || []).filter(h => h.id !== cur && h.start > today && !preparingNow(state, h)).slice(0, 2);
-    if (ahead.length) out.push(`Accepted invitations ahead: ${ahead.map(h => `${hName(h, ctx)} on ${isoOf(h.start)} (${inDays(h.start - today)})`).join('; ')} — they haven't happened yet; they come on their day.`);
+    if (ahead.length) out.push(`Accepted invitations ahead: ${ahead.map(h => `${hName(h, ctx)} on ${isoOf(h.start)} (${inDays(h.start - today)})`).join('; ')} — already settled, nobody needs to invite, ask or remind about it again; it stays in the background and comes on its day.`);
     if (state.invDeclined?.turn >= (state.turn || 0) - 1) out.push(`${userName} declined the invitation to ${state.invDeclined.name} — ${state.invDeclined.host || 'the host'} takes it in their own way; don't push it.`);
     // обещали прийти и не пришли — обида живёт несколько ответов
-    for (const x of (state.hurt || []).filter(x => (state.turn || 0) - x.turn <= 10)) {
+    // не в каждом ответе: на 1-м, 4-м и 8-м после обиды — иначе обиженный поминал её в каждой сцене
+    for (const x of (state.hurt || []).filter(x => [1, 4, 8].includes((state.turn || 0) - x.turn))) {
         out.push(`${x.who} is hurt: ${charName} and ${userName} accepted the invitation to ${x.what} and didn't come — ${x.who} is cooler with them now; it may show in passing (a remark, a cool word, a reproach), never as a scene of its own.`);
     }
     return out;
@@ -156,7 +157,8 @@ export function buildStatePrompt(ctx) {
 
     const h = phase.h;
     const active = (phase.kind === 'prep' || phase.kind === 'today') && h;
-    if (phase.kind === 'far' && h && !preparingNow(state, h)) {
+    const aheadAccepted = h && (ctx.acceptedAhead || []).some(x => x.id === h.id);
+    if (phase.kind === 'far' && h && !preparingNow(state, h) && !aheadAccepted) {
         lines.push(`Next: ${hName(h, ctx)} in ${phase.daysTo} days${h.meaning ? ` (${h.meaning})` : ''}. Not relevant yet — don't bring it up.`);
     }
     // другие праздники, к которым уже готовятся (принятое приглашение, повод из истории) — по строке, чтобы ни один не терялся
@@ -167,7 +169,7 @@ export function buildStatePrompt(ctx) {
     for (const x of (ctx.tracked || []).filter(x => x.id !== (active ? h?.id : null) && preparingNow(state, x)).slice(0, 2)) {
         const noted = readyNoted(state, x, 2);
         const cg = charGiftOf(state, x.id);
-        lines.push(`Also coming: ${hName(x, ctx)} — ${daysWord(x.start - state.today)}, on ${isoOf(x.start)}${x.npc || x.extra ? ' (invitation accepted)' : ''}${noted.length ? `; done so far: ${noted.join('; ')}` : ''}${cg?.text ? `; ${charName}'s gift: ${cg.text}${cg.done ? ' (given)' : ''}` : ''}. Getting ready may show in passing; the day itself hasn't come.`);
+        lines.push(`Also coming: ${hName(x, ctx)} — ${daysWord(x.start - state.today)}, on ${isoOf(x.start)}${x.npc || x.extra ? ' (invitation accepted)' : ''}${noted.length ? `; done so far: ${noted.join('; ')}` : ''}${cg?.text ? `; ${charName}'s gift: ${cg.text}${cg.done ? ' (given)' : ''}` : ''}. Background knowledge: it is settled, the day itself hasn't come — no need to bring it up unless the scene leads there.`);
     }
     // без помощника: изредка (чем ближе, тем чаще) — пусть подготовка к принятому покажется в мире сама
     if (phase.kind !== 'prep' && phase.kind !== 'today' && !state.beat && state.mentionNow && (ctx.tracked || []).length) {
@@ -187,8 +189,8 @@ export function buildStatePrompt(ctx) {
         const p = state.prep && state.prep.hid === h.id ? state.prep : null;
         const noted = readyNoted(state, h);
         const bits = [noted.length && `done so far: ${noted.join('; ')}`, p?.mood && `mood: ${p.mood}`].filter(Boolean);
-        if (bits.length) lines.push(`Preparations — ${bits.join(' · ')}. Carry on from there, never redo it.`);
-        if (h.extra) lines.push(`It is a gathering held by ${h.host || 'its hosts'}${h.meaning ? ` (${h.meaning})` : ''}; ${whomOf(ctx, h.whom)} ${h.whom === 'both' ? 'were' : 'was'} invited and ${userName} accepted — the hosts get ready, the invited may get ready too (clothes, a gift, a word).`);
+        if (bits.length) lines.push(`Preparations — ${bits.join(' · ')}. Never redo or retell it.`);
+        if (h.extra || h.story) lines.push(`It is ${h.extra ? 'a gathering' : 'an occasion from the story'}${h.host ? ` held by ${h.host}` : ''}${h.meaning ? ` (${h.meaning})` : ''}; ${userName} has already agreed to come — it is settled: nobody invites again, asks whether they're coming or keeps reminding of it. The hosts get ready on their side; for the invited it is a plain plan, at most a word about it when the scene touches it.`);
         if (h.npc) {
             const about = npcAbout(ctx, h);
             lines.push(`It is ${h.name}'s own occasion${about ? ` (${about})` : ''}, kept by ${h.name}'s household and close circle — a small family affair, not the whole place's; ${npcExpect(ctx, h)}.`);
@@ -198,7 +200,7 @@ export function buildStatePrompt(ctx) {
         }
         if (!state.beat) lines.push(state.mentionNow
             ? 'This reply: let the preparations show once, indirectly — as a consequence of them or a brief encounter with someone involved, never a restatement. Pick an angle not used before; never force it.'
-            : 'This reply: keep the preparations in the background.');
+            : 'This reply: keep the preparations in the background — don\'t mention them unless the scene itself does.');
     }
     if (phase.kind === 'today' && h) {
         const plan = state.days?.[`${h.id}#${phase.dayIndex}`];
@@ -208,11 +210,11 @@ export function buildStatePrompt(ctx) {
         if (plan && part && plan[part]) lines.push(`Now (${PART_EN[part]}): ${plan[part]}`);
         else if (h.meaning) lines.push(`Traditions: ${h.meaning}`);
         if (h.extra || h.story) {
-            lines.push(`It is ${h.extra ? 'a gathering' : 'an occasion from the story'}${h.host ? `, held by ${h.host}` : ''}, kept on its own schedule${plan?.where ? ` (${plan.where})` : ''}; ${userName} accepted, so ${whomOf(ctx, h.whom || 'both')} ${(h.whom || 'both') === 'both' ? 'are' : 'is'} expected. When the scene allows, the day draws them there; the story's own events come first, and if they can't come, it goes on without them. Follow its order — don't jump ahead.`);
+            lines.push(`It is ${h.extra ? 'a gathering' : 'an occasion from the story'}${h.host ? `, held by ${h.host}` : ''}, kept on its own schedule${plan?.where ? ` (${plan.where})` : ''}; ${userName} accepted, so ${whomOf(ctx, h.whom || 'both')} ${(h.whom || 'both') === 'both' ? 'are' : 'is'} expected. When its time comes and the scene allows, they head there; until then it stays in the background — no reminders in every reply. The story's own events come first, and if they can't come, it goes on without them. Follow its order — don't jump ahead.`);
         } else if (h.npc) {
             // чужой день рождения — свой распорядок у именинника; {{char}} и {{user}} — гости, а не хозяева дня
             const about = npcAbout(ctx, h);
-            lines.push(`It is ${h.name}'s day${about ? ` (${about})` : ''}: a small household occasion, kept by ${h.name} and their close ones on their own schedule${plan?.where ? ` (${plan.where})` : ''}; ${npcExpect(ctx, h)}. When the scene allows, the day draws ${charName} and ${userName} in — a reminder, someone sent for them, time to set off with a gift; the story's own events come first, and if they can't come, it goes on without them. Follow the day's order — don't jump ahead.`);
+            lines.push(`It is ${h.name}'s day${about ? ` (${about})` : ''}: a small household occasion, kept by ${h.name} and their close ones on their own schedule${plan?.where ? ` (${plan.where})` : ''}; ${npcExpect(ctx, h)}. When its time comes and the scene allows, the day draws ${charName} and ${userName} in — once: someone sent for them, time to set off with a gift; no reminders in every reply; the story's own events come first, and if they can't come, it goes on without them. Follow the day's order — don't jump ahead.`);
         } else lines.push(`The holiday keeps its own course: people follow today's plan as custom expects — and carry on without ${userName} if need be. The story's own events come first and may move or shorten a part, not cancel the day. Follow the day's order — don't jump ahead.`);
         if (h.birthday && h.who === 'user') lines.push(`It is ${userName}'s birthday: the prepared surprise comes out today.`);
     }
@@ -288,7 +290,7 @@ export function buildStatePrompt(ctx) {
     if (ev) {
         const who = ev.who ? ` (${ev.who})` : '';
         if (ev.status === 'invited') lines.push(`Invitation pending: ${ev.title}${who}. ${userName} decides whether to go.`);
-        else if (ev.kind === 'party' && !ev.moments?.length) lines.push(`${userName} accepted the invitation: ${ev.title}${who}. Lead there when the scene allows; it unfolds around the scene.`);
+        else if (ev.kind === 'party' && !ev.moments?.length) lines.push(`${userName} accepted the invitation: ${ev.title}${who}. It is settled — it happens when the scene gets there; don't invite or remind again.`);
         else if (ev.kind === 'party') lines.push(`At the gathering: ${ev.title}${who}${ev.moments?.length ? `; so far: ${ev.moments.slice(-2).map(m => m.title).join('; ')}` : ''}. It unfolds around the scene.`);
         else lines.push(`${userName} joins: ${ev.title}${who}${ev.hook ? ` (it began: ${ev.hook})` : ''}. ${ev.turn >= state.turn - 1 ? 'Carry on from where it began' : 'Let it unfold'} over the next replies; ${userName} still makes every own choice.`);
     }
@@ -299,7 +301,7 @@ export function buildStatePrompt(ctx) {
             : `If the scene allows, someone the occasion involves — kin or those its custom calls for — can come into this reply; one person, never a crowd.`);
     }
     // Что праздник может принести в этот ответ — придумал отдельный запрос по истории
-    if (!busy && state.beat) lines.push(`This reply, if the scene allows (it comes first; skip it if it doesn't fit): ${state.beat}`);
+    if (!busy && state.beat) lines.push(`This reply, only if it fits the scene naturally (skip it otherwise — the scene always comes first): ${state.beat}`);
     if (active) {
         lines.push(`If ${userName} is away from people (road, wilds, danger), the feast stays distant. The calendar never overrides the scene: an urgent or dramatic moment always comes first. Never write ${userName}'s thoughts, feelings, words or choices.`);
     }
@@ -410,7 +412,7 @@ const isOuting = (ctx, d) => (d ? d.kind === 'friendly' : (ctx.state.pair?.r ?? 
 const OUTING = 'a friendly outing — time together to get to know each other better, not a romantic date';
 const kindField = (ctx) => {
     const r = ctx.state.pair?.r ?? 0;
-    return r < 0 ? ` kind: outing — ${OUTING}.` : r === 0 ? ` kind: date or outing — whichever fits how they stand and the story (a first date, or ${OUTING}).` : ' kind: date.';
+    return r < 0 ? ` kind: outing — ${OUTING}.` : r < 20 ? ` kind: outing (${OUTING}) — or date only if the story itself shows it as romantic (they call it a date, flirt, confess).` : ' kind: date.';
 };
 const paceText = (ctx, d) => ({
     slow: `slow-burn: small, careful steps — words, glances, light touches; closeness is earned slowly`,
@@ -441,15 +443,19 @@ function dateStateLines(ctx) {
     const last = (state.datesDone || []).slice(-1)[0];
     if (last && d?.status === 'ended' && d.id === last.id && state.turn - (d.endTurn ?? -99) <= 3) {
         const feel = { great: `it went wonderfully — ${charName} is warm, bold and light, closer than before`, good: `it went well — ${charName} is pleased and a little closer`, awkward: `it was awkward — ${charName} is unsure, replays moments, wants to make it right`, bad: `it went badly — ${charName} is stung or withdrawn, careful with ${userName}`, terrible: `it went terribly — ${charName} is hurt, cold or ashamed; the distance shows` }[last.result] || '';
-        out.push(`The date (${last.title}) has just ended: ${feel}.${d.recap ? ` ${d.recap}` : ''} Let it color how ${charName} speaks and acts in the next replies.`);
+        // ни шага, ни срыва — свидание проскочили (таймскип): итог по нему не окрашивает ответы
+        const blank = !(d.steps || []).some(x => x.state === 'done' || x.state === 'failed') && !(d.log || []).some(x => ['misstep', 'moment', 'gift'].includes(x.kind));
+        out.push(blank
+            ? `The date (${last.title}) is over.${d.recap ? ` ${d.recap}` : ''}`
+            : `The date (${last.title}) has just ended: ${feel}.${d.recap ? ` ${d.recap}` : ''} Let it color how ${charName} speaks and acts in the next replies.`);
     }
     if (!d) return out;
     if (d.status === 'scheduled') {
         const left = dateHoursLeft(state);
         if (left == null || left > 30) return out;
-        out.push(`Planned: ${charName} and ${userName} have a date — ${d.title}${d.where ? `, ${d.where}` : ''}, ${dateAtText(state, d.at)}${d.goal ? `; it is meant to ${d.goal}` : ''}. ${charName} knows it and gets ready in ${charName}'s own way; if the story brings it on earlier, it begins then.`);
-        // помним — не подталкиваем; забыл, а срок близко — напомнить
-        if (left <= 4 && !ctx.dateMentioned) out.push(`It is close and ${charName} hasn't given it a thought lately — let ${charName} remember it now and act on it.`);
+        out.push(`Planned: ${charName} and ${userName} have ${isOuting(ctx, d) ? 'an outing' : 'a date'} — ${d.title}${d.where ? `, ${d.where}` : ''}, ${dateAtText(state, d.at)}${d.goal ? `; it is meant to ${d.goal}` : ''}. ${charName} keeps it in mind — background knowledge, not something to bring up in every reply; if the story brings it on earlier, it begins then.`);
+        // помним — не подталкиваем; забыл, а срок близко — напомнить один раз (решает index.js: state.dateRemind)
+        if (state.dateRemind === d.id) out.push(`It is close and ${charName} hasn't given it a thought lately — this reply, ${charName} remembers it once, in passing.`);
         return out;
     }
     if (d.status !== 'active') return out;
@@ -823,7 +829,7 @@ Only if the latest messages show something new at "${ev?.title || 'the gathering
     if (needs.has('dateplan')) task.push(datePlanRule(ctx));
     if (needs.has('daterecap') && !(needs.has('date') && state.date?.status === 'active')) task.push(dateRecapRule(ctx));
     if (needs.has('datewatch')) task.push(`<!-- HT-DATE title=… | goal=… | where=… | at=YYYY-MM-DD HH:MM | kind=… | started=… | agreed=… -->
-${GOAL_RULE(ctx)}. Only if the latest messages show a date or an outing of ${userName} and ${charName} alone that isn't tracked yet: one of them asks the other for one (at — when; now if right away), or they are already on it together (started=yes). agreed=yes only if ${userName}'s own message already said yes to it or ${userName} proposed it; if ${charName} asked and ${userName} hasn't answered yet — agreed=no and no started.${kindField(ctx)} Leave it out otherwise.`);
+${GOAL_RULE(ctx)}. Only if the latest messages show a date or an outing of ${userName} and ${charName} alone that isn't tracked yet — time spent together for its own sake (a walk, a café, the cinema, a trip for fun). Not an errand or a practical matter: shopping for something needed, a lift somewhere, chores, work, helping out — those are just the story: one of them asks the other for one (at — when; now if right away), or they are already on it together (started=yes). agreed=yes only if ${userName}'s own message already said yes to it or ${userName} proposed it; if ${charName} asked and ${userName} hasn't answered yet — agreed=no and no started.${kindField(ctx)} Leave it out otherwise.`);
     if (needs.has('new')) {
         // и то, на что уже позвали или позовут (дополнительные праздники, принятые приглашения): иначе каждое «приходи на…»
         // в истории становилось ещё одним поводом
@@ -831,17 +837,19 @@ ${GOAL_RULE(ctx)}. Only if the latest messages show a date or an outing of ${use
         const known = [...new Set([...(state.holidays || []).filter(x => x.start >= (state.today ?? 0) - 1).map(x => x.name), ...invited, ...(ctx.offerNames || []), ...(ctx.passed || [])].filter(Boolean))].slice(0, 14);
         const no = (ctx.offerSeen || []).slice(-10);
         task.push(`<!-- HT-NEW CAUSE | YYYY-MM-DD | DAYS | NAME | MEANING | TYPE | PREP | HOST | AGREED -->
-Only a festive occasion the story has set up that isn't in the calendar: a celebration of someone's life event, an announced party, feast or festive gathering, a leisure trip or outing agreed on for a set day — or one the card or lore dates within a month. A party, get-together or celebration at someone's place or out with friends, kin or colleagues for a set day counts, even if nobody has answered yet. Not business, work or plot meetings, talks, deals, errands, fights or casual drop-ins with no occasion: those are the story. Not a date of the two of them alone. CAUSE: what happened, a few words. NAME: what the occasion is (never just a person's name). Date: the day it takes place, counted from today; if it is already happening in the latest messages — today. TYPE: family | personal | religious | folk | memorial | gathering. HOST: who personally invited ${userName} or ${charName} to it in the story, empty if nobody did. AGREED: yes only if ${userName}'s own message already said yes to it or proposed it, or they are already there; no if ${userName} hasn't answered yet. At most two lines; leave the block out if there is none.${known.length ? ` Already known: ${known.join(', ')}.` : ''}${no.length ? ` Turned down by the player this year — never offer again, under any name: ${no.join('; ')}.` : ''}`);
+Only a festive occasion the story has set up that isn't in the calendar: a celebration of someone's life event, an announced party, feast or festive gathering, a leisure trip or outing agreed on for a set day — or one the card or lore dates within a month. A party, get-together or celebration at someone's place or out with friends, kin or colleagues for a set day counts, even if nobody has answered yet. Not business, work or plot meetings, talks, deals, errands, fights or casual drop-ins with no occasion: those are the story. Not a date of the two of them alone. CAUSE: what happened, a few words. NAME: what the occasion is (never just a person's name). Date: the day it takes place, counted from today; if it is already happening in the latest messages — today. DAYS: how many days it lasts — 1 for a party, evening, dinner or get-together; more only for a trip or a festival the story says lasts several days. TYPE: family | personal | religious | folk | memorial | gathering. HOST: who personally invited ${userName} or ${charName} to it in the story, empty if nobody did. AGREED: yes only if ${userName}'s own message already said yes to it or proposed it, or they are already there; no if ${userName} hasn't answered yet. At most two lines; leave the block out if there is none.${known.length ? ` Already known: ${known.join(', ')}.` : ''}${no.length ? ` Turned down by the player this year — never offer again, under any name: ${no.join('; ')}.` : ''}`);
     }
     if (needs.has('beat') && (h || (ctx.tracked || []).length)) {
         // что дать миру сделать в следующем ответе: шаг подготовки, которого ещё не было, — живыми людьми, вскользь;
         // в сам день — то, что день несёт сейчас. Потом помощник запишет это из истории в журнал (HT-READY)
-        const tr = (ctx.tracked || []).map(x => `${hName(x, ctx)} (${daysWord(x.start - state.today)})`);
+        const trH = (ctx.tracked || []).filter(x => pushable(state, x));
+        const tr = trH.map(x => `${hName(x, ctx)} (${daysWord(x.start - state.today)})`);
+        const gath = phase.kind === 'today' && h ? isGathering(h) : trH.some(isGathering);
         const what = phase.kind === 'today' && h ? `the festive day (${hName(h, ctx)}) — what it holds right now`
             : tr.length ? `a step of getting ready for ${tr.join(' or ')} that hasn't happened yet (see what is already noted) — the nearer the day, the more visible`
             : `the coming ${hName(h, ctx)} (in ${phase.daysTo} days — a passing mention at most)`;
         task.push(`<!-- HT-BEAT … -->
-One sentence in English for the story model: one concrete small thing for the NEXT reply — ${what} — shown through someone of this world doing it or speaking of it in passing, true to who they are, the era and the place (${ctx.eraMode === 'modern' ? 'present-day life' : 'their own customs and means'}); it moves things forward, never redoes what is done. Vary the kind and never repeat an earlier one${state.beatLog?.length ? ` (earlier: ${state.beatLog.join(' / ')})` : ''}. It must fit the current scene. At most one person per beat; for a family occasion, kin and those the custom involves may come in even if not seen yet. Write none if the scene is urgent or tense, ${userName} is away from people, the scene is already full, or nothing fits naturally — leaving room is fine. Never decide what ${userName} does, and never spoil a surprise meant for ${userName}.`);
+One sentence in English for the story model: one concrete small thing for the NEXT reply — ${what} — shown through someone of this world doing it or speaking of it in passing, true to who they are, the era and the place (${ctx.eraMode === 'modern' ? 'present-day life' : 'their own customs and means'}); it moves things forward, never redoes what is done. Vary the kind and never repeat an earlier one${state.beatLog?.length ? ` (earlier: ${state.beatLog.join(' / ')})` : ''}. It must fit the current scene.${gath ? ` For a gathering or invitation (a party, get-together, someone's birthday): ${userName} has already agreed — never a new or repeated invitation, never asking again whether they're coming, never a reminder of the date or time; only a real small step that fits (picking clothes or a gift, a word with someone who's also going), or none.` : ''} Write none if the latest messages already touched this occasion. At most one person per beat; for a family occasion, kin and those the custom involves may come in even if not seen yet. Write none if the scene is urgent or tense, ${userName} is away from people, the scene is already full, or nothing fits naturally — leaving room is fine. Never decide what ${userName} does, and never spoil a surprise meant for ${userName}.`);
     }
     task.push('Never write the story, comments outside the blocks, or explanations.');
     return [

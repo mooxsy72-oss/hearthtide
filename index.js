@@ -11,10 +11,10 @@ import {
 import { eventSource, event_types } from '../../../../scripts/events.js';
 
 import { dayPart, plural, parseDate, fromDayNum, isoOf, dayNum } from './dates.js';
-import { slimSmallTag, parseReady, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
+import { slimSmallTag, glueTag, parseReady, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
 import { PAIR_DEFAULT, bondCap, dateKindFor, isFriendlyDate, newDate, startDate, applyDateUp, openSteps, goalOpen, doneCount, toggleStep, finishDate, dateChanceInfo, migrateDate, DATE_MISS_HOURS, DATE_OPEN, DATE_SKIP_END, DATE_SKIP_HARD, DATE_CLOSE_TURNS, DATE_QUIET, goalNeed, paceAuto, stepKinds, MISS_PAIR } from './romance.js';
 import { CAST_GROUPS, KIN_GROUPS, ROM_KEYS, isKin, samePerson, findCast, castBanned, parseBday, bdayText, bdayIn, ageOf, relLevel, romLevel, clampRel, mergeCast, migrateCast, nameCandidates } from './cast.js';
-import { phaseOf, mentionEvery, holidayId, allHolidays, banKeys, isBanned, namesMatch, passedThisYear, sameOccasion, hasGifts, openEvent, offeredEvent, EVENT_CHANCE_DEFAULT, EVENT_COOLDOWN, OPEN_STATUSES, sideNeeds, sideDue, CENSUS_DEPTH, dateHoursLeft, npcBdKey, npcBdOn, npcHoliday, giftJoint, trackedOccasions, charGiftOf, activeOccasions, occTier, preparingNow } from './calendar.js';
+import { phaseOf, mentionEvery, holidayId, allHolidays, banKeys, isBanned, namesMatch, passedThisYear, sameOccasion, hasGifts, openEvent, offeredEvent, EVENT_CHANCE_DEFAULT, EVENT_COOLDOWN, OPEN_STATUSES, sideNeeds, sideDue, CENSUS_DEPTH, dateHoursLeft, npcBdKey, npcBdOn, npcHoliday, giftJoint, trackedOccasions, charGiftOf, activeOccasions, occTier, preparingNow, pushable, pushTracked, PUSH_GAP } from './calendar.js';
 import { buildStatePrompt, buildTagPrompt, buildSideMessages, buildDateReview, buildDateSideMessages, buildDateRefillMessages, giftTarget, hName, isGathering } from './prompts.js';
 import { inviteCandidates, bdKey, extraKey, mergeExtras, INVITE_TRIES, INVITE_COOL, INVITE_AHEAD } from './invites.js';
 import { listProfiles, gatherSources, loreFor, sendSide, reasonOf, withNote, canDirect, directActive } from './side.js';
@@ -618,6 +618,7 @@ function processReply(N) {
     if (snap) restoreSnapshot(snap);
     takeSnapshot(N);
     const hadDateRoll = !!state.dateRoll;     // в промпте этого ответа была просьба позвать на свидание
+    const hadDateRemind = state.dateRemind || null;   // и напоминание о намеченном свидании — оно звучит один раз
     const hadInvRoll = state.invRoll ? { ...state.invRoll } : null;   // и просьба произнести приглашение
     state.turn += 1;
     state.beat = null;      // подсказка ушла в этот ответ
@@ -636,11 +637,12 @@ function processReply(N) {
     // Чистим текст сообщения от крупных блоков и «неправильных» форм тега
     // в тексте остаётся только дата, время и место: имена из who=, char=, invite= и прочего лорбук читает по ключам,
     // а всё это уже разобрано (полный ответ — в extra.ht_raw)
-    const cleaned = slimSmallTag(stripBlocks(text));
+    const cleaned = glueTag(slimSmallTag(stripBlocks(text)));
     if (cleaned !== text && cleaned.trim()) {
         msg.mes = cleaned;
         if (Array.isArray(msg.swipes) && msg.swipe_id != null) msg.swipes[msg.swipe_id] = cleaned;
         text = cleaned;
+        if (typeof msg.extra?.display_text === 'string') msg.extra.display_text = glueTag(msg.extra.display_text);
         try { stModule?.updateMessageBlock?.(N, msg); } catch (e) { /* пусто */ }
     }
     msg.extra = msg.extra || {};
@@ -872,6 +874,13 @@ function processReply(N) {
             state.lastDateEnd = state.turn;
             recordDate(state, dd, true);
         }
+    }
+    // напоминание о намеченном свидании: один раз, когда срок близко, а {{char}} о нём молчит; после срока — не напоминаем
+    if (hadDateRemind && dd?.id === hadDateRemind) dd.reminded = true;
+    state.dateRemind = null;
+    if (dd?.status === 'scheduled' && !dd.reminded) {
+        const left = dateHoursLeft(state);
+        if (left != null && left <= 4 && left >= 0 && !dateMentioned()) state.dateRemind = dd.id;
     }
     if (dd?.status === 'active') {
         // темп (слоуберн / обычный / фастберн): выбран в настройках или по романтике пары в начале свидания
@@ -1184,7 +1193,7 @@ function processReply(N) {
     // ── Упоминать ли подготовку в следующем ответе (чем ближе, тем чаще) ──
     state.mentionNow = false;
     // и когда готовятся к принятому приглашению или поводу из истории — чем ближе день, тем чаще
-    const nearTracked = trackedOccasions(state).filter(x => x.start > state.today).reduce((m, x) => (m == null ? x.start - state.today : Math.min(m, x.start - state.today)), null);
+    const nearTracked = pushTracked(state).filter(x => x.start > state.today).reduce((m, x) => (m == null ? x.start - state.today : Math.min(m, x.start - state.today)), null);
     const mentionDays = phase.kind === 'prep' ? phase.daysTo : nearTracked;
     if ((phase.kind === 'prep' || (phase.kind !== 'today' && nearTracked != null)) && state.turn - state.lastMention >= mentionEvery(mentionDays)) {
         state.mentionNow = true;
@@ -1193,7 +1202,7 @@ function processReply(N) {
     // ── Кто из людей праздника может зайти в следующий ответ: по очереди, не толпой ──
     state.nudge = null;
     const nudgeNow = phase.kind === 'today' ? state.turn % 2 === 0 : state.mentionNow;
-    if (phase.h && nudgeNow) {
+    if (phase.h && nudgeNow && pushable(state, phase.h)) {
         const ppl = (state.people || []).filter(p => p.now);   // список людей сбрасывается при смене праздника
         if (ppl.length) {
             const p = ppl[(state.nudgeIdx || 0) % ppl.length];
@@ -1201,6 +1210,7 @@ function processReply(N) {
             state.nudge = { name: p.name, now: p.now };
         } else state.nudge = { name: null };
     }
+    gatePushes(phase, text);
 
     // ── Снимок для инфоблока этого сообщения ──
     // Почему нет праздников — подсказка в инфоблоке, чтобы было видно, чья это проблема
@@ -1735,6 +1745,41 @@ function invCardHtml() {
             <button class="ht-btn ht-btn-quiet" data-act="inv-no"><i class="fa-solid fa-xmark"></i><span>${L().decline}</span></button>
         </div>
     </div>`;
+}
+
+/**
+ * Подталкивания миру (BEAT помощника, «пусть подготовка покажется», «кто-то заходит») — не чаще раза в PUSH_GAP ответов.
+ * И не сразу после ответа, где этот повод уже звучал: иначе персонажи напоминали о встрече в каждом сообщении.
+ * В сам день праздник и есть сцена — там упоминание не мешает, только пауза.
+ */
+function gatePushes(phase, text) {
+    const any = () => !!(state.beat || state.mentionNow || state.nudge);
+    if (!any()) return;
+    const gap = phase.kind === 'today' ? PUSH_GAP.today : PUSH_GAP.other;
+    let why = null;
+    if ((state.turn || 0) - (state.lastPush ?? -99) < gap) why = 'пауза после прошлой подсказки';
+    else if (phase.kind !== 'today') {
+        const names = pushTracked(state).filter(h => h.start > state.today).map(h => hName(h, { userName: getUserName(), charName: getCharName() }));
+        if (phase.h && phase.kind === 'prep') names.push(hName(phase.h, { userName: getUserName(), charName: getCharName() }));
+        if (occasionMentioned(text, names)) { why = 'повод уже звучал в этом ответе'; state.lastPush = state.turn; }
+    }
+    if (why) {
+        console.debug(`[Hearthtide] подсказка миру пропущена: ${why}`);
+        state.beat = null; state.mentionNow = false; state.nudge = null;
+        return;
+    }
+    state.lastPush = state.turn;
+}
+/** Звучит ли повод в тексте: по основам значимых слов названия (как с названием свидания) */
+const OCC_STOP = new Set(['празднование', 'праздник', 'вечеринка', 'встреча', 'новый', 'большой', 'святой', 'великий', 'международный', 'held', 'birthday', 'party', 'great', 'national', 'international']);
+function occasionMentioned(text, names) {
+    const t = String(text || '').replace(/<!--[\s\S]*?-->/g, ' ').toLowerCase().replace(/ё/g, 'е');
+    if (!t.trim()) return false;
+    return names.some(n => {
+        const words = String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/\([^)]*\)/g, ' ').split(/[^\p{L}\d]+/u)
+            .filter(w => w.length >= 5 && !OCC_STOP.has(w)).map(w => w.slice(0, Math.max(4, w.length - 2)));
+        return words.length && words.some(w => t.includes(w));
+    });
 }
 
 /** {{char}} думал о свидании в последних ответах? Тогда не подталкиваем */
@@ -4475,7 +4520,26 @@ function onChatChanged() {
     loadState();
     noteCharSettings();
     injectPrompts();
+    glueOldTags();
     for (const ms of [150, 600, 1500]) setTimeout(renderAll, ms);
+}
+
+/** Старые ответы, где HT-строка стоит отдельно, а после ответа идёт блок ExtBlocks (картинка), — приклеить строку к тексту */
+function glueOldTags() {
+    if (!isEnabled()) return;
+    let n = 0;
+    chat.forEach((msg, i) => {
+        if (!msg || msg.is_user || msg.is_system || !msg.mes || !msg.extra?.extblocks) return;
+        const glued = glueTag(msg.mes);
+        const disp = typeof msg.extra.display_text === 'string' ? glueTag(msg.extra.display_text) : null;
+        if (glued === msg.mes && (disp == null || disp === msg.extra.display_text)) return;
+        msg.mes = glued;
+        if (disp != null) msg.extra.display_text = disp;
+        if (Array.isArray(msg.swipes) && msg.swipe_id != null && msg.swipes[msg.swipe_id] != null) msg.swipes[msg.swipe_id] = glueTag(msg.swipes[msg.swipe_id]);
+        try { stModule?.updateMessageBlock?.(i, msg); } catch (e) { /* пусто */ }
+        n++;
+    });
+    if (n) { console.info(`[Hearthtide] HT-строка приклеена к тексту в ${n} ответах (картинки ExtBlocks больше не сдвигаются)`); saveChatDebounced(); }
 }
 
 // Таверна дорисовывает сообщения позже событий — следим за самим #chat

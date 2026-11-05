@@ -107,11 +107,14 @@ export const DATE_RESULTS_FRIENDLY = { great: { f: 12, r: 3 }, good: { f: 7, r: 
  * Какая встреча: свидание (romantic) или дружеская встреча, чтобы узнать друг друга (friendly).
  * Романтика выше 0 — свидание; ниже 0 — только дружеская; ровно 0 — как решили модель или история (asked), иначе свидание.
  */
+/** Романтика ниже этого порога — свидание только если сама история его так назвала; иначе дружеская встреча */
+export const ROM_DATE = 20;
 export function dateKindFor(pair, asked = null) {
     const r = pair?.r ?? 0;
     if (r < 0) return 'friendly';
-    if (r > 0) return 'romantic';
-    return asked === 'friendly' ? 'friendly' : 'romantic';
+    if (r >= ROM_DATE) return 'romantic';
+    // слабая романтика (давние друзья с искрой в 5): решает то, как это назвала история; по умолчанию — дружеская встреча
+    return asked === 'romantic' ? 'romantic' : 'friendly';
 }
 export const isFriendlyDate = (d) => d?.kind === 'friendly';
 
@@ -269,7 +272,8 @@ export function resultOf(d) {
     const score = typeof d === 'number' ? d : d.score;
     if (typeof d === 'object' && failCount(d) >= 2 && failCount(d) > doneCount(d) && score < 25) return DATE_RESULTS[DATE_RESULTS.length - 1];
     // короткое, но тёплое свидание без срывов — не «не задалось»
-    if (typeof d === 'object' && !failCount(d) && doneCount(d) >= 2 && score < 25) return DATE_RESULTS.find(r => r.key === 'awkward');
+    // без единого срыва — не хуже нейтрального: свидание, которое проскочил таймскип (0 % и ни одного шага), не «ужасное»
+    if (typeof d === 'object' && !failCount(d) && score < 25) return DATE_RESULTS.find(r => r.key === 'awkward');
     return DATE_RESULTS.find(r => score >= r.min) || DATE_RESULTS[DATE_RESULTS.length - 1];
 }
 

@@ -230,6 +230,26 @@ export function trackedOccasions(state) {
 }
 
 /**
+ * Можно ли подталкивать мир к этому поводу (BEAT, «пусть подготовка покажется», кто-то заходит).
+ * Отслеживаем принятое приглашение за три недели — но только чтобы записывать сделанное по истории.
+ * Толкать к нему — лишь в окне подготовки (у встреч и приглашений — за пару дней) и в сам день:
+ * иначе посиделки в кафе через две недели всплывали почти в каждом ответе.
+ */
+export const GATHER_PUSH = 2;
+export function pushable(state, h) {
+    if (!h || state.today == null) return false;
+    const d = h.start - state.today;
+    if (h.start + h.days - 1 < state.today) return false;
+    if (d <= 0) return true;
+    if (h.npc || h.extra || h.story) return d <= Math.max(prepWindow(state, h), GATHER_PUSH);
+    return d <= prepWindow(state, h) || (h.birthday && d <= 7);
+}
+/** Отслеживаемое, к которому сейчас можно подталкивать */
+export const pushTracked = (state) => trackedOccasions(state).filter(h => pushable(state, h));
+/** Сколько ответов минимум между двумя подталкиваниями (BEAT, упоминание, кто-то заходит) */
+export const PUSH_GAP = { today: 2, other: 3 };
+
+/**
  * Что из отслеживаемого показывать как «готовятся»: у кого открыто окно подготовки или к кому история уже готовится
  * (есть сделанное, подарок). Принятое приглашение через две недели без единого шага — это «Дальше», а не «готовятся».
  * Идущее сегодня — тоже не «готовятся»: это «Сегодня также».
@@ -293,7 +313,10 @@ export function sideNeeds(state, phase) {
     if (active && !h.birthday && !state.giftTo?.[h.id] && state.gifts?.[h.id]) n.add('giftto');
     // подготовка по истории: что сделано, подарки, отменили ли — для всех праздников, которые сейчас готовятся
     if (trackedOccasions(state).length) n.add('ready');
-    if (active || (phase.kind === 'far' && h && phase.daysTo <= 14) || trackedOccasions(state).length) n.add('beat');
+    // подсказка миру — только когда к поводу можно подталкивать: идущий, окно подготовки, далёкий праздник календаря;
+    // принятая встреча через неделю записывается (ready), но не подталкивается
+    const chosenH = !!(h && (h.npc || h.extra || h.story));
+    if ((active && pushable(state, h)) || (phase.kind === 'far' && h && !chosenH && phase.daysTo <= 14) || pushTracked(state).length) n.add('beat');
     if ((state.holidays || []).some(x => x.needMeaning && !isBanned(state, x.name))) n.add('mean');
     n.add('new');   // поводы из истории ищем при каждом запросе — это почти ничего не стоит
     n.add('cast');  // новые люди истории и перемены в отношениях — тоже
