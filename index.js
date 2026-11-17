@@ -2022,7 +2022,7 @@ function declineOffer(oid) {
     window.toastr?.info?.(L().offerDropped, 'Hearthtide');
 }
 
-/** Название повода — что это, а не имя человека: «Константин Коновалов» вместо «Бани» меняем на описание */
+/** Название повода — что это, а не имя человека: «Иван Петров» вместо «Бани» меняем на описание */
 function occasionName(name, ...alt) {
     const n = String(name || '').trim();
     const person = [getUserName(), getCharName(), ...(state.cast || []).map(c => c.name)].filter(Boolean).some(p => samePerson(p, n))
