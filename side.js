@@ -6,26 +6,6 @@ import { chat, this_chid, characters } from '../../../../script.js';
 
 const ctxST = () => globalThis.SillyTavern?.getContext?.() || null;
 
-// ─── Ключ API, записанный в профиле ───
-// Профиль хранит id ключа (secret-id). Если ключ потом удалили или ввели заново, у него новый id —
-// при выборе профиля таверна просто остаётся на активном ключе, и чат работает. Но Connection Manager
-// шлёт старый id, сервер не находит ключ и отвечает пустой ошибкой («Response not OK»).
-// Поэтому id, которого нет среди ключей, не отправляем: сервер возьмёт активный ключ, как в обычном чате.
-let secretsMod = null;
-async function knownSecretIds() {
-    if (!secretsMod) secretsMod = await import('../../../secrets.js').catch(() => ({}));
-    const state = secretsMod?.secret_state;
-    if (!state || typeof state !== 'object' || !Object.keys(state).length) return null;   // неизвестно — не трогаем
-    const ids = new Set();
-    for (const list of Object.values(state)) if (Array.isArray(list)) for (const s of list) if (s?.id) ids.add(s.id);
-    return ids;
-}
-function profileById(svc, id) {
-    try { return svc?.getProfile?.(id) || null; } catch (e) { /* нет такого профиля — дальше по списку */ }
-    return (ctxST()?.extensionSettings?.connectionManager?.profiles || []).find(p => p.id === id) || null;
-}
-const dropSecret = { secret_id: undefined };   // undefined убирается из запроса — сервер берёт активный ключ
-
 let shared = null;
 async function service() {
     const fromCtx = ctxST()?.ConnectionManagerRequestService;
@@ -170,34 +150,11 @@ export async function sendSide(profileId, messages, signal, maxTokens = 4000) {
     if (profileId && !svc && canDirect()) { console.info('[Hearthtide] Connection Manager выключен — помощник идёт через текущее подключение таверны'); profileId = ''; }
     if (profileId && !svc) throw new Error('Connection Manager недоступен (расширение выключено или таверна слишком старая)');
     if (!profileId && !canDirect()) throw new Error('нет ни профиля подключения, ни текущего подключения таверны (таверна слишком старая)');
-    const profile = profileId ? profileById(svc, profileId) : null;
-    // Vertex AI: способ входа (express / full — сервисный аккаунт) и project id не хранятся в профиле, их берёт
-    // только пресет. Без пресета сервер считает вход express — и с сервисным аккаунтом отвечает «Response not OK»
-    let extra = {};
-    try {
-        if (profile && svc.validateProfile?.(profile)?.source === 'vertexai') {
-            const cc = ctxST()?.chatCompletionSettings || {};
-            if (cc.vertexai_auth_mode) extra.vertexai_auth_mode = cc.vertexai_auth_mode;
-            if (cc.vertexai_express_project_id) extra.vertexai_express_project_id = cc.vertexai_express_project_id;
-        }
-    } catch (e) { extra = {}; }
-    // ключ профиля: если его id больше нет среди сохранённых ключей — идём через активный ключ
-    let override = extra;   // меняется только здесь, до запросов
-    const secretId = profile?.['secret-id'] || '';
-    if (secretId) {
-        const ids = await knownSecretIds();
-        if (ids && !ids.has(secretId)) {
-            console.warn('[Hearthtide] ключ API из профиля не найден (удалён или введён заново) — запрос идёт с активным ключом');
-            override = { ...extra, ...dropSecret };
-        }
-    }
     const once = async (msgs, n, sig) => {
         if (!profileId) return askDirect(msgs, n, sig);
-        // Повтора «с другим ключом» нет намеренно: если ключ профиля настоящий, а запрос упал по другой причине,
-        // активный ключ мог бы уйти на адрес этого профиля (чужой прокси). Активный ключ — только вместо удалённого.
         const res = await svc.sendRequest(profileId, msgs, n, {
             stream: false, signal: sig, extractData: true, includePreset: false, includeInstruct: true,
-        }, override);
+        });
         return { text: String(typeof res === 'string' ? res : (res?.content ?? '')), reasoning: typeof res === 'string' ? '' : String(res?.reasoning ?? '') };
     };
     // свой сигнал: отменяется вместе с внешним или по тайм-ауту
@@ -240,9 +197,7 @@ export function reasonOf(e) {
         const m = x?.error?.message || x?.message || (typeof x === 'string' ? x : '');
         if (m && !chain.includes(m)) chain.push(m);
     }
-    const out = chain.join(' → ') || 'неизвестная ошибка';
-    // «Response not OK» — сервер таверны не передал причину: она только в его консоли
-    return /Response not OK$/i.test(out) ? `${out} (сервер таверны не сообщил причину — она в окне консоли, где запущен SillyTavern)` : out;
+    return chain.join(' → ') || 'неизвестная ошибка';
 }
 
 /**
