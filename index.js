@@ -4361,7 +4361,7 @@ function injectSettingsPanel() {
             localStorage.setItem(LS.depth, e.target.value);
         });
         document.getElementById('ht-set-scan')?.addEventListener('click', () => {
-            if (!apiOn()) { window.toastr?.info?.(L().noProfile, 'Hearthtide'); return; }
+            if (!apiOn()) { window.toastr?.info?.(isEnabled() ? L().noProfile : L().disabledNote, 'Hearthtide'); return; }
             if (!state || lastProcessedMsg() < 0) { window.toastr?.info?.(L().scanNothing, 'Hearthtide'); return; }
             window.toastr?.info?.(L().scanToast, 'Hearthtide');
             maybeSide(lastProcessedMsg(), true, ['census']);     // заодно — перепись людей истории
@@ -4401,7 +4401,8 @@ let pinging = false;
 async function pingProfile() {
     if (pinging) return;
     const id = apiProfile();
-    if (!apiOn()) { window.toastr?.info?.(L().noProfile, 'Hearthtide'); return; }
+    // выключенное расширение — не «нет профиля»: говорим прямо, что выключено
+    if (!apiOn()) { window.toastr?.info?.(isEnabled() ? L().noProfile : L().disabledNote, 'Hearthtide'); return; }
     const btn = document.getElementById('ht-set-ping');
     pinging = true;
     btn?.classList.add('ht-pinging');
