@@ -274,6 +274,10 @@ export function resultOf(d) {
     // короткое, но тёплое свидание без срывов — не «не задалось»
     // без единого срыва — не хуже нейтрального: свидание, которое проскочил таймскип (0 % и ни одного шага), не «ужасное»
     if (typeof d === 'object' && !failCount(d) && score < 25) return DATE_RESULTS.find(r => r.key === 'awkward');
+    // ни срыва, ни промаха, а тёплые моменты или сделанные шаги были — это не «неловко»: короткое свидание
+    // просто не успевает набрать половину шкалы, а основная модель от «awkward» делает персонажа неуверенным
+    if (typeof d === 'object' && !failCount(d) && !(d.log || []).some(x => x.kind === 'misstep') && score < 50
+        && (doneCount(d) || (d.log || []).some(x => x.kind === 'moment' || x.kind === 'gift'))) return DATE_RESULTS.find(r => r.key === 'good');
     return DATE_RESULTS.find(r => score >= r.min) || DATE_RESULTS[DATE_RESULTS.length - 1];
 }
 

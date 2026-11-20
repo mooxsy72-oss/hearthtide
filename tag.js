@@ -11,6 +11,14 @@ const clean = (v, max = 400) => {
     const x = String(v ?? '').replace(/\s+/g, ' ').trim();
     return x && !/^(none|null|нет|-|—|n\/a)$/i.test(x) ? x.slice(0, max) : null;
 };
+/** Короткая подпись: режем по слову, а не посреди слова («жаждет провести» вместо «жаждет пров») */
+const cleanWords = (v, max) => {
+    const x = clean(v, 1000);
+    if (!x || x.length <= max) return x;
+    const cut = x.slice(0, max);
+    const sp = cut.lastIndexOf(' ');
+    return `${(sp > max * 0.6 ? cut.slice(0, sp) : cut).replace(/[\s,;:—-]+$/, '')}…`;
+};
 // длинный текст режем по концу предложения, а не на полуслове
 const cleanSentences = (v, max) => {
     const x = clean(v, 4000);
@@ -81,7 +89,7 @@ export function parseSmall(text, name = 'HT') {
         ugiftDone: /^(true|yes|1|да)$/i.test(String(f.ugift_done || '').trim()),
         // {{char}} и {{user}}: дружба / романтика −100…100 и коротко, как они сейчас
         bond: parseBond(f.bond, inner),
-        bondNote: clean(f.bond_note, 60),
+        bondNote: cleanWords(f.bond_note, 110),
         // {{char}} и {{user}} — родня друг другу (брат и сестра, родитель и ребёнок…): без романтики и свиданий
         bondKin: /^(yes|true|да)/i.test(String(f.bond_kin || '').trim()) ? true : /^(no|false|нет)/i.test(String(f.bond_kin || '').trim()) ? false : null,
         // {{char}} в этом ответе позвал на свидание, задуманное помощником
@@ -380,7 +388,7 @@ export function parseAt(v) {
 export function parseDateUp(text) {
     const inner = findBlock(text, 'HT-DATE-UP');
     if (inner == null) return null;
-    const up = { start: false, phase: null, why: null, done: [], fail: [], missed: [], add: [], moments: [], gifts: [], learn: [], missteps: [], know: null, mood: 0, vibe: null, thought: null, goal: false, recap: null, best: null };
+    const up = { move: null, cancel: null, start: false, phase: null, why: null, done: [], fail: [], missed: [], add: [], moments: [], gifts: [], learn: [], missteps: [], know: null, mood: 0, vibe: null, thought: null, goal: false, recap: null, best: null };
     const num = (v) => { const m = String(v || '').match(/^\s*(?:№|#|s)?\s*(\d{1,3})\b/i); return m ? +m[1] : null; };
     const yes = (v) => /^(yes|true|да|1)\b/i.test(String(v || '').trim());
     // «done|failed|open», «up|down», «on|ending|over» — образец, а не ответ
@@ -390,6 +398,9 @@ export function parseDateUp(text) {
         const cols = raw.split('|').map(x => x.trim());
         const k = (cols[0] || '').replace(/^[\s\-*•]+/, '').replace(/[:.]+$/, '').toUpperCase();
         if (k === 'START') up.start = true;
+        // намеченное перенесли или отменили в самой истории
+        else if (k === 'MOVE') { const at = parseAt(cols.slice(1).join(' ')); if (at) up.move = at; }
+        else if (k === 'CANCEL') { const why = stepText(cols[1], 140); if (why) up.cancel = why; }
         else if (k === 'STATE') {
             const v = String(cols[1] || '').toLowerCase();
             up.phase = /^(over|ended|done|конч|законч|окончен)/.test(v) ? 'over' : /^(ending|closing|winding|подход|заверш)/.test(v) ? 'ending' : /^(on|going|ongoing|идёт|идет|продолж)/.test(v) ? 'on' : up.phase;

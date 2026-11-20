@@ -68,7 +68,16 @@ export function settingTone(ctx) {
     return `Customs, plans and wording are those people of this era and place really have; if it is our present-day world — ${MODERN_TONE}.`;
 }
 /** Живая мысль {{char}}: его голос, его словарь, его эмоция — а не спокойное пояснение */
-export const LIVE_VOICE = (ctx) => `raw and alive, first person, the way ${ctx.charName} really talks inside — the card's and the story's own words, slang, humour, rudeness or swearing if ${ctx.charName} speaks like that, nerves, want, doubt, excitement; not a calm explanation`;
+export const LIVE_VOICE = (ctx) => `raw and alive, first person, the way ${ctx.charName} really talks inside — the card's and the story's own words, slang, humour, rudeness or swearing if ${ctx.charName} speaks like that, nerves, want, doubt, excitement; not a calm explanation; never about owning, claiming or guarding ${ctx.userName} as his`;
+/**
+ * Люди — не собственность: заметки помощника не описывают одного как вещь или территорию другого.
+ * Ревность и контроль, если история их показывает, называются прямо, но не хвалятся и не становятся «сутью» пары —
+ * иначе одна и та же фраза в каждой заметке делает из персонажа собственника в каждом ответе.
+ */
+export const RESPECT = 'Never describe one person as the other\'s property or territory: no "claims her", "his woman", "mine", "his rights to her", "marks his territory", "alpha", "male", "prey", "predator", "instinct", "owner". If the story shows jealousy or control, name it plainly (jealous, controlling, overbearing) — never praised, romanticised or used as the summary of the relationship.';
+/** Подпись или мысль в духе «он заявил права на неё», «моя», «альфа», «добыча» — отбрасываем */
+export const OWNING = /(прав[аоы]?\s+на\s|заявл\S*\s+прав|застолб|собственни|собственност|присвои|принадлежит\s+(ему|ей|мне)|моя\s+(женщина|девочка|девушка)|(^|[^а-яё])моя([.!…]|$)|только\s+моя|никому\s+(её|ее|его)?\s*не\s+отда|альфа|самец|самк[аи]|добыч|хищни|метит\S*\s+территори|свою\s+территори|инстинкт|my woman|(^|\W)mine(\W|$)|claim\S*\s+(her|him)|possessiv|(^|\W)alpha(\W|$)|predator|(^|\W)prey(\W|$)|territor)/i;
+export const owning = (t) => OWNING.test(String(t || ''));
 /** Мероприятие (чужой день рождения, собрание, повод из истории) — не праздник календаря: своё расписание, на него можно не прийти */
 export const isGathering = (h) => !!(h && (h.npc || h.extra || h.story));
 
@@ -152,7 +161,7 @@ export function buildStatePrompt(ctx) {
     const busy = busyReply(state);
     const s = state.setting || {};
     const lines = ['[Hearthtide — the world\'s calendar and festive life; background for the story, not its topic]'];
-    const where = [s.era && `Setting: ${s.era}`, s.faith && `faith: ${s.faith}`, (state.place || s.place) && `place: ${state.place || s.place}`, state.when && `date: ${state.when}`].filter(Boolean);
+    const where = [s.era && `Setting: ${s.era}`, s.faith && !noFaith(state) && `faith: ${s.faith}`, (state.place || s.place) && `place: ${state.place || s.place}`, state.when && `date: ${state.when}`].filter(Boolean);
     if (where.length) lines.push(where.join(' · ') + '.');
 
     const h = phase.h;
@@ -262,9 +271,11 @@ export function buildStatePrompt(ctx) {
     if (state.dateDeclined?.turn >= state.turn) lines.push(`${userName} said no to the date (${state.dateDeclined.title}) — ${charName} takes it in ${charName}'s own way.`);
 
     // {{char}} и {{user}}: как они сейчас
+    // подпись пары — только пока свежая: одна и та же фраза в каждом ответе превращается в одно и то же поведение
+    const pn = state.pair?.note && !owning(state.pair.note) && (ctx.side || (state.turn || 0) - (state.pair.noteTurn ?? -99) <= 2) ? ` — lately: ${state.pair.note}` : '';
     if (state.pair) lines.push(state.pair.kin
-        ? `${charName} and ${userName} are family to each other: closeness ${state.pair.f} (−100…100, 0 neutral)${state.pair.note ? ` — ${state.pair.note}` : ''}; no romance between them.`
-        : `${charName} and ${userName}: friendship ${state.pair.f}, romance ${state.pair.r} (both −100…100, 0 neutral)${state.pair.note ? ` — ${state.pair.note}` : ''}.`);
+        ? `${charName} and ${userName} are family to each other: closeness ${state.pair.f} (−100…100, 0 neutral)${pn}; no romance between them.`
+        : `${charName} and ${userName}: friendship ${state.pair.f}, romance ${state.pair.r} (both −100…100, 0 neutral)${pn}.`);
     // Свидание: намечено (понимание, что скоро; напомнить, только если {{char}} о нём забыл) или идёт (шаги {{char}} и общие)
     lines.push(...dateStateLines(ctx));
 
@@ -274,7 +285,7 @@ export function buildStatePrompt(ctx) {
         const REL = { enmity: 'enmity', conflict: 'in conflict', cool: 'cool', neutral: 'even', warm: 'warm', close: 'close' };
         const how = (c, k) => c.note?.[k] || REL[relLevel(c.rel?.[k] ?? 0)];
         lines.push(`Who is who (it shows in how they speak and act): ${ctx.castSeen.map(c => {
-            const ties = [c.toU && `${userName}'s ${c.toU}`, c.toC && `${charName}'s ${c.toC}`].filter(Boolean).join(', ');
+            const ties = [c.toU && `to ${userName}: ${c.toU}`, c.toC && `to ${charName}: ${c.toC}`].filter(Boolean).join('; ');
             const rom = [c.rom?.user && `romance with ${userName}: ${c.rom.user}`, c.rom?.char && `romance with ${charName}: ${c.rom.char}`].filter(Boolean).join('; ');
             return `${c.name || c.toU || c.toC}${ties ? ` (${ties})` : ''} — with ${userName}: ${how(c, 'user')}; with ${charName}: ${how(c, 'char')}${rom ? `; ${rom}` : ''}`;
         }).join(' · ')}.`);
@@ -343,7 +354,7 @@ function holidayGuide(ctx) {
     const faith = noFaith(ctx.state)
         ? `Religious feasts: none of the church calendar — only the one or two the whole country marks as public days off.`
         : `Religious feasts: only if the card, persona, lore or story shows THESE characters living by a faith — then only the biggest feasts of that faith (e.g. Orthodox Christmas on Jan 7, Easter on its correct date that year). The country's majority faith alone is not a reason. Never minor church feasts (saints' days, feasts of the Virgin and the like).`;
-    const modern = `MODERN SETTING: only what most people in this country actually celebrate today — major public holidays and days off, big festive days everyone knows. Skip minor official days, professional days, awareness and memorial days, and niche imported holidays, unless one matters to these characters personally. For Russia, for example: New Year (Dec 31 and the January holidays), Defender of the Fatherland Day (Feb 23), International Women's Day (Mar 8), Spring and Labour Day (May 1), Victory Day (May 9), Russia Day (Jun 12), National Unity Day (Nov 4); also widely kept: Valentine's Day, Maslenitsa, Knowledge Day (Sep 1). ${faith} Take the character card and lore into account.`;
+    const modern = `MODERN SETTING: only what most people in this country actually celebrate today — major public holidays and days off, big festive days everyone knows. Skip minor official days, professional days, awareness and memorial days, and niche imported holidays, unless one matters to these characters personally. For Russia, for example: New Year (Dec 31, into the night of Jan 1), Defender of the Fatherland Day (Feb 23), International Women's Day (Mar 8), Spring and Labour Day (May 1), Victory Day (May 9), Russia Day (Jun 12), National Unity Day (Nov 4); also widely kept: Valentine's Day, Maslenitsa, Knowledge Day (Sep 1). ${faith} Take the character card and lore into account. Days off in a row (like the New Year holidays of Jan 1–8 or the May days) are not an occasion of their own: list only the holiday itself (New Year on Dec 31, 2 days, covering the night), never the break.`;
     if (ctx.eraMode === 'modern') return modern;
     if (ctx.eraMode === 'ancient') return past;
     // эпоха ещё не определена — модель решает сама, и для наших дней действуют правила современности
@@ -486,7 +497,7 @@ function dateUpRule(ctx) {
     const lang = langOf(ctx);
     const scope = 'in the messages marked [NEW]';
     if (d.status === 'scheduled') {
-        return `<!-- HT-DATE-UP\nSTART\nNEW | <task for ${charName}> | <${charName}'s thought>\n-->\nFill in the lines, never copy the <…> placeholders. Only if the date "${d.title}" (planned ${dateAtText(state, d.at)}; goal: ${d.goal || 'to be together'}) has actually begun ${scope} — they are at the place or already doing what was planned; getting ready, picking up, the road there or waiting is not the date yet: START, then ${DATE_OPEN} NEW first steps toward the goal. ${stepFlow(ctx, d)} ${stepForm(ctx)} Never chores or anything off the date. Otherwise write nothing.`;
+        return `<!-- HT-DATE-UP\nSTART\nNEW | <task for ${charName}> | <${charName}'s thought>\nMOVE | <YYYY-MM-DD HH:MM>\nCANCEL | <why, a few words>\n-->\nFill in the lines, never copy the <…> placeholders. The date "${d.title}" is planned ${dateAtText(state, d.at)} (today is ${isoOf(state.today)}; goal: ${d.goal || 'to be together'}). Only if it has actually begun ${scope} — they are at the place or already doing what was planned; getting ready, picking up, the road there or waiting is not the date yet: START, then ${DATE_OPEN} NEW first steps toward the goal. ${stepFlow(ctx, d)} ${stepForm(ctx)} Never chores or anything off the date. MOVE — only if ${scope} they agreed on another day or time for it (or the invitation itself named a day or time other than the planned one): the new day and time. CANCEL — only if ${scope} it was plainly called off. Otherwise write nothing.`;
     }
     const open = openSteps(d);
     const list = open.map(s => `${s.n}. ${s.t}`).join('\n');
@@ -549,7 +560,7 @@ export function buildDateSideMessages(ctx, src) {
     if (d && (d.status === 'active' || d.status === 'scheduled')) task.push(dateUpRule(ctx));
     if (state.dateRecapFor && !(d?.status === 'active')) task.push(dateRecapRule(ctx));
     return [
-        { role: 'system', content: `You track a date between ${charName} and ${userName} in an ongoing roleplay for an extension. Answer only with the requested hidden block, nothing else. Count what the story actually shows — fairly, not stingily: a step done in spirit is done.` },
+        { role: 'system', content: `You track a date between ${charName} and ${userName} in an ongoing roleplay for an extension. Answer only with the requested hidden block, nothing else. Count what the story actually shows — fairly, not stingily: a step done in spirit is done. Steps and thoughts are about care, attention and closeness, never about owning, guarding or claiming ${userName}. ${RESPECT}` },
         { role: 'user', content: [
             src.card && `[${charName}]\n${src.card}`,
             src.persona && `[${userName}]\n${src.persona}`,
@@ -630,10 +641,37 @@ Write only the asking; ${userName} answers. Only if ${charName} actually said it
 }
 
 // Случайный ивент: предлагается игроку кнопками, в историю входит, только если он принял
+/** Чем живёт праздник — помощнику, чтобы подсказки и ивенты были в духе повода, а не «что-нибудь праздничное» */
+export function occasionFlavor(h, ctx) {
+    const name = String(h?.name || '').toLowerCase();
+    const modern = ctx.eraMode === 'modern';
+    if (!modern) return 'its own customs and rites as this era and place keep them: food, songs, games, visits, small rituals, someone\'s antics';
+    if (h?.birthday || h?.npc || /день рожд|юбилей|birthday/.test(name)) return 'a toast in turn, a cake with candles, a funny or touching gift, a guest\'s story about the birthday person, a song, a photo, someone arriving late';
+    if (/корпорат|офис|работ|office|party|вечерин/.test(name) || h?.type === 'gathering') return 'a boss\'s or colleague\'s toast, a silly party contest (a quiz, a dance-off, a balloon or tug-of-war game, a prize draw), Ded Moroz or a host with a game, karaoke, a tipsy colleague\'s antics, secret-Santa gifts';
+    if (/нов(ый|ого) год|new year/.test(name)) return 'the chimes and the president\'s address, writing a wish on paper, sparklers, fireworks outside, a call from relatives, gifts under the tree, Olivier and champagne, a neighbour dropping by';
+    if (/рождеств|christmas/.test(name)) return 'a festive meal, a church service or carols, gifts, a call to family, candles and lights';
+    if (/валентин|valentine/.test(name)) return 'flowers, a card or small gift, a café with hearts, a couple nearby, a radio song';
+    if (/масленн/.test(name)) return 'pancakes, a sledding hill, burning the effigy, folk games, a market';
+    return 'what people usually do on this day here: a meal, a toast, a visit, a call, music, a small tradition, someone\'s funny moment';
+}
+
+/** Помощнику: выпал шанс ивента — придумать, что именно случится в следующем ответе */
+export function evPlanRule(ctx) {
+    const t = ctx.evTarget;
+    const { state, userName, charName } = ctx;
+    const past = (state.evts || []).filter(e => e.hid === t.hid && e.kind !== 'moment').map(e => e.title).slice(-4);
+    const h = ctx.phase?.kind === 'today' ? ctx.phase.h : null;
+    return `<!-- HT-EVPLAN kind=event|party | title=… | who=… | hook=… -->
+A chance happening for the NEXT reply at ${t.name}: one concrete thing that livens the occasion up — ${h ? occasionFlavor(h, ctx) : t.kind === 'date' ? 'a small surprise around them: a street musician, a photographer, an unexpected meeting, a game or treat on offer, the weather turning' : 'something true to the moment'}. It must fit this exact scene, the people already there and the mood; someone present starts it. kind=party only if it is an invitation to a separate gathering; otherwise event. title: 2–5 words; who: the person who starts it (a name from the story or a role); hook: how it starts, one sentence — ${charName} and ${userName} can join or not. In ${langOf(ctx)}.${past.length ? ` Different in kind from: ${past.join(' / ')}.` : ''} Never anything urgent, dangerous or that decides for ${userName}.`;
+}
+
 function eventOfferRule(ctx) {
     const { state, userName } = ctx;
     const t = ctx.evTarget;
     const past = (state.evts || []).filter(e => e.hid === t.hid && e.kind !== 'moment').map(e => e.title).slice(-4);
+    const p = state.evPlan && state.evPlan.hid === t.hid ? state.evPlan : null;
+    // помощник уже придумал, что именно случится: конкретная просьба выполняется куда чаще абстрактной
+    if (p) return `This reply — the occasion livens up: ${p.who ? `${p.who} starts` : 'it begins:'} ${p.hook || p.title} ("${p.title}"). Weave it into the scene naturally, true to the people and the moment; show only how it starts (someone begins it or calls ${userName} in) and stop where ${userName} can choose to join or not. Then add after the HT line: <!-- HT-EV kind=${p.kind === 'party' ? 'party' : 'event'} | title=${p.title} | who=${p.who || ''} | hook=<what has just begun, one sentence in ${langOf(ctx)}> -->. Only an urgent or dramatic moment may push it off — then add nothing.`;
     return `This reply, if the scene allows: let one chance happening at ${t.name} begin — outside its own plan, brought by a person, by chance or by the world around, true to the era, the place and the moment; it livens up the people around and the world. Show only its start (someone begins it or invites ${userName}) and stop where ${userName} can choose to join. Then add after the HT line: <!-- HT-EV kind=event|party | title=… | who=… | hook=… --> — kind=party if it is an invitation to a gathering; title a few words; who brings it; hook: what has just begun, one sentence; in ${langOf(ctx)}.${past.length ? ` Different in kind from: ${past.join(' / ')}.` : ''} If the scene is urgent or nothing fits, skip it and add nothing.`;
 }
 function calRule(ctx) {
@@ -771,7 +809,7 @@ export function buildSideMessages(ctx, needs, src) {
     const { state, phase, userName, charName } = ctx;
     const h = phase.h;
     const lang = langOf(ctx);
-    const sys = [`You are Hearthtide, the keeper of the holiday calendar for an ongoing roleplay between ${userName} and ${charName}. You do not continue the story. You read it and reply ONLY with the hidden blocks asked for below — no other text. Notes about what happened hold only what the story has shown. Never decide ${userName}'s thoughts, feelings, words or choices.`];
+    const sys = [`You are Hearthtide, the keeper of the holiday calendar for an ongoing roleplay between ${userName} and ${charName}. You do not continue the story. You read it and reply ONLY with the hidden blocks asked for below — no other text. Notes about what happened hold only what the story has shown. Never decide ${userName}'s thoughts, feelings, words or choices. ${RESPECT}`];
     if (src.card) sys.push(`[${charName}]\n${src.card}`);
     if (src.persona) sys.push(`[${userName}]\n${src.persona}`);
     if (src.lore) sys.push(`[World info]\n${src.lore}`);
@@ -794,6 +832,7 @@ export function buildSideMessages(ctx, needs, src) {
     if (needs.has('extras') && !needs.has('cal')) task.push(extrasRule(ctx));
     if (needs.has('people') && h) task.push(`${PEOPLE_BLOCK}\n${peopleRules(ctx)}`);
     if (needs.has('recap') && phase.ended) task.push(recapRule(ctx));
+    if (needs.has('evplan') && ctx.evTarget) task.push(evPlanRule(ctx));
 
     // Короткие поля одной строкой
     const sf = [];
@@ -814,9 +853,9 @@ export function buildSideMessages(ctx, needs, src) {
     }
     if (needs.has('mean') && ctx.meaningFor) sf.push(`mean=what "${ctx.meaningFor}" is and how it is kept in this era and place, one sentence`);
     const pr = state.pair;
-    if (needs.has('bond') && pr) sf.push(`bond=FRIENDSHIP/ROMANCE only if the latest messages clearly changed how ${charName} and ${userName} stand (now ${pr.f}/${pr.r}${pr.note ? `, ${pr.note}` : ''}; both −100…100); bond_note=a few words on how they are now; leave both out if nothing changed`);
+    if (needs.has('bond') && pr) sf.push(`bond=FRIENDSHIP/ROMANCE only if the latest messages clearly changed how ${charName} and ${userName} stand (now ${pr.f}/${pr.r}${pr.note ? `, ${pr.note}` : ''}; both −100…100); bond_note=a few words on how they are now — what they share or what stands between them (${RESPECT}); leave both out if nothing changed`);
     if (needs.has('ugift') && h) sf.push(`ugift=only if ${userName}'s own messages name, get or give ${userName}'s own gift for ${h.name} — what it is, as ${userName} wrote it; ugift_done=true once given; never a guess`);
-    if (needs.has('bond') && !pr) sf.push(`bond=FRIENDSHIP/ROMANCE: how ${charName} and ${userName} stand by the card, persona and story, two numbers −100…100 — friendship (enmity … 0 neutral … very close), romance (hatred or exes … 0 none … deep love); spouses, lovers, rivals and strangers all differ; bond_note=a few words on how they are now; bond_kin=yes only if they are family to each other by blood or upbringing (then romance 0)`);
+    if (needs.has('bond') && !pr) sf.push(`bond=FRIENDSHIP/ROMANCE: how ${charName} and ${userName} stand by the card, persona and story, two numbers −100…100 — friendship (enmity … 0 neutral … very close), romance (hatred or exes … 0 none … deep love); spouses, lovers, rivals and strangers all differ; bond_note=a few words on how they are now — what they share or what stands between them (${RESPECT}); bond_kin=yes only if they are family to each other by blood or upbringing (then romance 0)`);
     const keys = (x) => (x.startsWith('bond=') ? 'bond=F/R | bond_note=… | bond_kin=…' : x.startsWith('went=') ? 'went=… | went_note=…' : `${x.split('=')[0]}=…`);
     if (sf.length) task.push(`<!-- HT-S ${sf.map(keys).join(' | ')} -->\n${sf.map(x => `- ${x}`).join('\n')}`);
 
@@ -849,7 +888,9 @@ Only a festive occasion the story has set up that isn't in the calendar: a celeb
             : tr.length ? `a step of getting ready for ${tr.join(' or ')} that hasn't happened yet (see what is already noted) — the nearer the day, the more visible`
             : `the coming ${hName(h, ctx)} (in ${phase.daysTo} days — a passing mention at most)`;
         task.push(`<!-- HT-BEAT … -->
-One sentence in English for the story model: one concrete small thing for the NEXT reply — ${what} — shown through someone of this world doing it or speaking of it in passing, true to who they are, the era and the place (${ctx.eraMode === 'modern' ? 'present-day life' : 'their own customs and means'}); it moves things forward, never redoes what is done. Vary the kind and never repeat an earlier one${state.beatLog?.length ? ` (earlier: ${state.beatLog.join(' / ')})` : ''}. It must fit the current scene.${gath ? ` For a gathering or invitation (a party, get-together, someone's birthday): ${userName} has already agreed — never a new or repeated invitation, never asking again whether they're coming, never a reminder of the date or time; only a real small step that fits (picking clothes or a gift, a word with someone who's also going), or none.` : ''} Write none if the latest messages already touched this occasion. At most one person per beat; for a family occasion, kin and those the custom involves may come in even if not seen yet. Write none if the scene is urgent or tense, ${userName} is away from people, the scene is already full, or nothing fits naturally — leaving room is fine. Never decide what ${userName} does, and never spoil a surprise meant for ${userName}.`);
+One sentence in English for the story model: one concrete small thing for the NEXT reply — ${what} — shown through someone of this world doing it or speaking of it in passing, true to who they are, the era and the place (${ctx.eraMode === 'modern' ? 'present-day life' : 'their own customs and means'}); it moves things forward, never redoes what is done. Vary the kind and never repeat an earlier one${state.beatLog?.length ? ` (earlier: ${state.beatLog.join(' / ')})` : ''}. It must fit the current scene.${phase.kind === 'today' && h
+    ? ` On the day itself something always goes on: pick what this occasion holds right now and hasn't happened yet in the story — ${occasionFlavor(h, ctx)}. Someone of the people present does it; it may draw ${charName} and ${userName} in, but they choose for themselves. Write none only if the scene is urgent, tense, intimate, or they are away from the occasion.`
+    : `${gath ? ` For a gathering or invitation (a party, get-together, someone's birthday): ${userName} has already agreed — never a new or repeated invitation, never asking again whether they're coming, never a reminder of the date or time; only a real small step that fits (picking clothes or a gift, a word with someone who's also going), or none.` : ''} Write none if the latest messages already touched this occasion.`} At most one person per beat; for a family occasion, kin and those the custom involves may come in even if not seen yet. Write none if the scene is urgent or tense, ${userName} is away from people, the scene is already full, or nothing fits naturally — leaving room is fine. Never decide what ${userName} does, and never spoil a surprise meant for ${userName}.`);
     }
     task.push('Never write the story, comments outside the blocks, or explanations.');
     return [

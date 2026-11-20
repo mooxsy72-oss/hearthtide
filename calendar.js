@@ -166,10 +166,17 @@ const endOf = (h) => h.start + h.days - 1;
  * Что сейчас в календаре.
  * kind: none | far | prep | today | after
  */
+/**
+ * Выходные подряд («новогодние каникулы», «майские») — не праздник, а фон: главным они не становятся,
+ * иначе восемь дней подряд модель слышит «сегодня праздник, следуй распорядку».
+ */
+export const isBreak = (h) => !!h && (h.days || 1) >= 3 && !h.birthday && !h.npc && !h.extra && !h.story
+    && /каникул|выходные дни|нерабоч|праздничные дни|майские|days off|holiday break|bank holiday/i.test(String(h.name || ''));
+
 export function phaseOf(state) {
     const today = state.today;
     if (today == null) return { kind: 'none', upcoming: [] };
-    const list = allHolidays(state);
+    const list = allHolidays(state).filter(h => !isBreak(h));
     const upcoming = list.filter(h => h.start > today);
     const active = pickActive(state, list.filter(h => today >= h.start && today <= endOf(h)));
     const ended = list.find(h => endOf(h) === today - 1 && !state.recapDone?.[h.id]);
@@ -341,6 +348,8 @@ export function sideNeeds(state, phase) {
     // приглашение пришло от основной модели — помощник проверяет, что позвали вслух, а не только подумали
     // кубик выпал — план свидания составляет помощник: по карточке, персоне, лорбуку и истории
     if (state.dateRoll && !state.datePlan && !['active', 'offered', 'scheduled', 'pending'].includes(ds)) n.add('dateplan');
+    // выпал шанс ивента — что именно случится, придумывает помощник (основная модель абстрактную просьбу пропускает)
+    if (state.evRoll && !state.evPlan) n.add('evplan');
     return n;
 }
 
@@ -353,7 +362,7 @@ export const CENSUS_DEPTH = 30;
 /** Отправлять ли отдельный запрос после этого ответа */
 export function sideDue(state, phase, needs) {
     // то, без чего инфоблок пустой или неверный, — сразу
-    if (['recap', 'cal', 'mean', 'day', 'replan', 'census', 'date', 'daterecap', 'dateplan', 'went'].some(k => needs.has(k))) return true;
+    if (['recap', 'cal', 'mean', 'day', 'replan', 'census', 'date', 'daterecap', 'dateplan', 'evplan', 'went'].some(k => needs.has(k))) return true;
     // пара ещё не ясна — спросить сразу, но не чаще раза в 5 ответов, если помощник её не дал
     if (needs.has('bond') && !state.pair && (state.turn || 0) - (state.bondSide ?? -99) >= 5) return true;
     const since = (state.turn || 0) - (state.lastSideTurn ?? -99);

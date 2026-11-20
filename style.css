@@ -1092,3 +1092,31 @@ dialog.ht-modal:not([open]) { display: none; }
 .ht-ring-off::after { animation: none; border-color: var(--ht-line); }
 .ht-ring-off > i { animation: none; color: var(--ht-mute); }
 .ht-noapi .ht-head { cursor: default; }
+
+/* ═══ 1.1: спокойнее и ровнее — одни и те же «карточки внутри» вместо цветных рамок и пунктира ═══ */
+.ht-char, .ht-npcbd, .ht-gifts {
+    margin: 8px 0; padding: 9px 12px;
+    border: 1px solid var(--ht-line);
+    border-left: 3px solid color-mix(in srgb, var(--ht-acc) 70%, transparent);
+    border-radius: 10px;
+    background: var(--ht-soft);
+}
+.ht-gifts { gap: 7px; }
+.ht-char-gift { border-top: 1px solid var(--ht-line); }
+.ht-char-head .ht-care, .ht-care {
+    border: 0; padding: 1px 9px; font-size: 0.78em;
+    background: var(--ht-soft-2); color: var(--ht-mute);
+}
+.ht-care-high { background: color-mix(in srgb, var(--ht-fire) 18%, transparent); color: var(--ht-fg); }
+.ht-char-now { font-style: italic; }
+.ht-char-now > span { font-style: normal; }
+:is(.ht-ib) .ht-gift-mode { border-color: var(--ht-line); padding: 1px 9px; }
+.ht-mute { font-size: 0.86em; }
+.ht-sec + .ht-sec { border-top-color: color-mix(in srgb, var(--ht-fg) 10%, transparent); }
+/* шапка: свидание идёт — в шапке оно */
+.ht-ring-date { width: 42px; height: 42px; border-radius: 50%;
+    box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--ht-fire) 80%, transparent); }
+.ht-ring-date .ht-ring-center { color: var(--ht-fire); }
+.ht-head-datenow.ht-friendly .ht-ring-date { box-shadow: inset 0 0 0 4px color-mix(in srgb, var(--ht-friend, #6fbf73) 80%, transparent); }
+.ht-head-datenow.ht-friendly :is(.ht-ring-center, .ht-title i) { color: var(--ht-friend, #6fbf73); }
+.ht-head-datenow .ht-title i { color: var(--ht-fire); }

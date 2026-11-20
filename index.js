@@ -11,11 +11,11 @@ import {
 import { eventSource, event_types } from '../../../../scripts/events.js';
 
 import { dayPart, plural, parseDate, fromDayNum, isoOf, dayNum } from './dates.js';
-import { slimSmallTag, glueTag, parseReady, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
+import { parseAt, slimSmallTag, glueTag, parseReady, parseExtras, parseSmall, parseCalendar, parsePrep, parseDay, parseRecap, parsePeople, parseEvents, parseOffers, parseBeat, parseCast, parseDateBlock, parseDateUp, parseRecapParts, stripBlocks } from './tag.js';
 import { PAIR_DEFAULT, bondCap, dateKindFor, isFriendlyDate, newDate, startDate, applyDateUp, openSteps, goalOpen, doneCount, toggleStep, finishDate, dateChanceInfo, migrateDate, DATE_MISS_HOURS, DATE_OPEN, DATE_SKIP_END, DATE_SKIP_HARD, DATE_CLOSE_TURNS, DATE_QUIET, goalNeed, paceAuto, stepKinds, MISS_PAIR } from './romance.js';
 import { CAST_GROUPS, KIN_GROUPS, ROM_KEYS, isKin, samePerson, findCast, castBanned, parseBday, bdayText, bdayIn, ageOf, relLevel, romLevel, clampRel, mergeCast, migrateCast, nameCandidates } from './cast.js';
 import { phaseOf, mentionEvery, holidayId, allHolidays, banKeys, isBanned, namesMatch, passedThisYear, sameOccasion, hasGifts, openEvent, offeredEvent, EVENT_CHANCE_DEFAULT, EVENT_COOLDOWN, OPEN_STATUSES, sideNeeds, sideDue, CENSUS_DEPTH, dateHoursLeft, npcBdKey, npcBdOn, npcHoliday, giftJoint, trackedOccasions, charGiftOf, activeOccasions, occTier, preparingNow, pushable, pushTracked, PUSH_GAP } from './calendar.js';
-import { buildStatePrompt, buildTagPrompt, buildSideMessages, buildDateReview, buildDateSideMessages, buildDateRefillMessages, giftTarget, hName, isGathering } from './prompts.js';
+import { owning, buildStatePrompt, buildTagPrompt, buildSideMessages, buildDateReview, buildDateSideMessages, buildDateRefillMessages, giftTarget, hName, isGathering } from './prompts.js';
 import { inviteCandidates, bdKey, extraKey, mergeExtras, INVITE_TRIES, INVITE_COOL, INVITE_AHEAD } from './invites.js';
 import { listProfiles, gatherSources, loreFor, sendSide, reasonOf, withNote, canDirect, directActive } from './side.js';
 import { strings } from './i18n.js';
@@ -609,6 +609,9 @@ function langOk(v) {
 /** Приветствие (до первого сообщения игрока): его свайпы ничего не запускают — всё начинается с первого ответа бота */
 const isOpening = (N) => !chat.slice(0, N).some(m => m?.is_user);
 
+/** Для разбора тегов: необычные пробелы и «[ ]» между словами — обычный пробел */
+const normSpaces = (t) => String(t || '').replace(/\[[\u2000-\u200b\u2800\u00a0\u202f\u3000 ]\]/g, ' ').replace(/[\u2000-\u200b\u2800\u202f\u3000]/g, ' ');
+
 function processReply(N) {
     const msg = chat[N];
     if (!state || !msg || msg.is_user || msg.is_system || !msg.mes) return;
@@ -620,6 +623,7 @@ function processReply(N) {
     const hadDateRoll = !!state.dateRoll;     // в промпте этого ответа была просьба позвать на свидание
     const hadDateRemind = state.dateRemind || null;   // и напоминание о намеченном свидании — оно звучит один раз
     const hadInvRoll = state.invRoll ? { ...state.invRoll } : null;   // и просьба произнести приглашение
+    const hadEvRoll = state.evRoll ? { plan: state.evPlan ? { ...state.evPlan } : null, tries: state.evTry || 0 } : null;   // и просьба начать ивент
     state.turn += 1;
     state.beat = null;      // подсказка ушла в этот ответ
 
@@ -632,7 +636,8 @@ function processReply(N) {
     // Модели с «думалкой» иногда пишут теги в рассуждениях, а в ответ не переносят — тогда берём оттуда
     const think = String(msg.extra?.reasoning || '');
     const fromThink = !/<!--\s*HT/i.test(source) && /<!--\s*HT/i.test(think);
-    const src = fromThink ? think : source;
+    // странные пробелы (U+2800, U+2007, «[ ]» — модели копируют их из первого сообщения карточки) ломают разбор тегов
+    const src = normSpaces(fromThink ? think : source);
 
     // Чистим текст сообщения от крупных блоков и «неправильных» форм тега
     // в тексте остаётся только дата, время и место: имена из who=, char=, invite= и прочего лорбук читает по ключам,
@@ -687,6 +692,11 @@ function processReply(N) {
     const plan = hadDateRoll ? state.datePlan : null;
     if (plan && !dateIn?.started && (dateIn || small?.dateAsked || conf?.date === true)) {
         dateIn = { ...plan, steps: [], started: false, ...(dateIn ? { title: dateIn.title || plan.title, hook: dateIn.hook || plan.hook, kind: plan.kind || dateIn.kind } : {}) };
+    }
+    // время из самой истории важнее плана: «завтра к шести» — значит завтра к шести, а не «сегодня в 18:00» из плана
+    if (dateIn && !dateIn.started && conf?.when && (conf.when.now || conf.when.day != null || conf.when.clock != null)) {
+        const w = conf.when;
+        dateIn = { ...dateIn, at: w.now ? { now: true } : { day: w.day ?? dateIn.at?.day ?? null, clock: w.clock ?? dateIn.at?.clock ?? null } };
     }
     // проверка сказала «только подумал» — приглашения нет, кубик остаётся (позовёт позже)
     if (dateIn && !dateIn.started && !dateIn.agreed && conf?.date === false) {
@@ -840,7 +850,9 @@ function processReply(N) {
             if (f !== step(prev.f, f, c.f) || r !== step(prev.r, r, c.r)) console.info(`[Hearthtide] пара: модель дала ${f}/${r}, принято ${step(prev.f, f, c.f)}/${step(prev.r, r, c.r)} (шаг не больше +${c.f}/+${c.r} за ответ)`);
             f = step(prev.f, f, c.f); r = step(prev.r, r, c.r);
         }
-        state.pair = { scale: 2, f, r: kin ? 0 : r, kin, note: sm.bondNote && langOk(sm.bondNote) ? sm.bondNote : prev?.note || null };
+        const freshNote = sm.bondNote && langOk(sm.bondNote) && !owning(sm.bondNote) ? sm.bondNote : null;
+        if (sm.bondNote && owning(sm.bondNote)) console.info(`[Hearthtide] подпись пары отброшена — собственническая: ${sm.bondNote}`);
+        state.pair = { scale: 2, f, r: kin ? 0 : r, kin, note: freshNote || prev?.note || null, noteTurn: freshNote && freshNote !== prev?.note ? state.turn : (prev?.noteTurn ?? state.turn) };
         state.lastBondTurn = state.turn;
         state.bondMiss = 0;
     } else if (!state.pair && (small || sideRec)) {
@@ -865,7 +877,21 @@ function processReply(N) {
     const endNow = () => { const e = finishDate(state, state.turn, dateLevel()); if (e) recordDate(state, e); return e; };
     let dd = state.date;
     // намеченное началось — в срок или раньше: только теперь шкала и шаги
-    if (dd?.status === 'scheduled' && (up?.start || dateIn?.started)) startDate(dd, state.turn);
+    // перенесли или отменили в самой истории («давай в воскресенье в пять») — до проверки «не состоялось»
+    if (dd?.status === 'scheduled' && up?.move && !up.start) {
+        const m = up.move;
+        dd.at = m.now ? { day: state.today, clock: state.clock ?? 18 } : { day: m.day ?? dd.at?.day ?? state.today, clock: m.clock ?? dd.at?.clock ?? 18 };
+        dd.reminded = false;
+        console.info(`[Hearthtide] свидание перенесли в истории: ${isoOf(dd.at.day)} ${Math.floor(dd.at.clock ?? 18)}:${String(Math.round(((dd.at.clock ?? 18) % 1) * 60)).padStart(2, '0')}`);
+    }
+    if (dd?.status === 'scheduled' && up?.cancel && !up.start) {
+        dd.status = 'cancelled';
+        dd.endWhy = up.cancel;
+        state.lastDateEnd = state.turn;
+        console.info(`[Hearthtide] свидание отменили в истории: ${up.cancel}`);
+        dd = null;
+    }
+    if (dd?.status === 'scheduled' && (up?.start || dateIn?.started)) { startDate(dd, state.turn); markStart(dd); }
     if (dd?.status === 'scheduled') {
         const left = dateHoursLeft(state);
         if (left != null && left < -DATE_MISS_HOURS) {
@@ -887,7 +913,7 @@ function processReply(N) {
         const ps = datePaceSetting();
         dd.pace = ps !== 'auto' ? ps : (dd.paceAuto ?? (dd.paceAuto = paceAuto(state.pair?.r)));
         dd.need = goalNeed(lvl, dd.pace);
-        // один раз: открытые шаги из прошлых версий — не задачи («Лёша уберёт…») или повторы одного вида — убираем, места дозапросим
+        // один раз: открытые шаги из прошлых версий — не задачи («Петя уберёт…») или повторы одного вида — убираем, места дозапросим
         // шагов теперь открыто меньше (DATE_OPEN): лишние из прошлой версии уходят; цель-название — в настоящую цель
         if ((dd.taskV || 0) < 3) {
             for (const st of openSteps(dd)) if (st.slot >= DATE_OPEN) st.state = 'dropped';
@@ -981,6 +1007,7 @@ function processReply(N) {
         else if (!dateIn.started && dateIn.agreed && sideAsked.includes('datewatch') && d.at?.now) acceptInto(state, d);
         // при помощнике карточка и уведомление — только когда проверка ответила (или упала)
         else if (dateWait && d.status === 'offered') d.status = 'pending';
+        if (d.status === 'active') markStart(d);
         if (d.status !== 'declined') state.date = d;
         state.dateRoll = false;
         // свидание договорили в самой истории — карточки «Пойти» не нужно (уже согласились), но игрок должен заметить
@@ -1002,8 +1029,10 @@ function processReply(N) {
         N, hash: coreHash(text), pend,
         date: !!(dateIn && !dateIn.started && !dateIn.agreed) || (hadDateRoll && !!state.datePlan && state.date?.status !== 'active'),
         inv: inviteWatch(text, hadInvRoll, small?.invite),
+        // просили начать ивент по плану, а отметки нет — спросить, начался ли он в тексте
+        ev: hadEvRoll?.plan && !evs.some(e => e.kind !== 'moment') ? hadEvRoll.plan : null,
     } : null;
-    if (confirmNeed && !confirmNeed.date && !confirmNeed.inv.length && !confirmNeed.pend) confirmNeed = null;
+    if (confirmNeed && !confirmNeed.date && !confirmNeed.inv.length && !confirmNeed.pend && !confirmNeed.ev) confirmNeed = null;
 
     // ── Сегодня несколько праздников: главный — тот, что празднуют в ролплее ──
     updateFocus(sm?.focus);
@@ -1065,6 +1094,7 @@ function processReply(N) {
         // шаг, почти повторяющий прошлые словами, не принимаем — цепочка должна идти дальше
         const echo = (t) => (state.charLog[phase.h.id] || []).slice(-3).some(x => echoes(x.text, t));
         if (sm.char && echo(sm.char)) sm.char = null;
+        if (sm.char && owning(sm.char)) { console.info(`[Hearthtide] мысль персонажа отброшена — собственническая: ${sm.char}`); sm.char = null; }
         if (sm.char) {
             if (langOk(sm.char)) {
                 state.charNow = { hid: phase.h.id, text: sm.char, turn: state.turn };
@@ -1115,7 +1145,14 @@ function processReply(N) {
         state.recapDone[phase.ended.id] = true;
     }
     // ── Ивенты и мероприятия ──
+    // основная модель начала ивент, но отметку HT-EV не поставила — проверка подтвердила, что он начался: берём план помощника
+    const evPlanNow = hadEvRoll?.plan;
+    if (evPlanNow && !evs.some(e => e.kind !== 'moment') && conf?.ev === true) {
+        evs.push({ kind: evPlanNow.kind === 'party' ? 'party' : 'event', title: evPlanNow.title, who: evPlanNow.who || null, hook: conf.evHook || evPlanNow.hook || null });
+        console.info(`[Hearthtide] ивент начался в ответе без отметки — по проверке: ${evPlanNow.title}`);
+    }
     processEvents(evTarget(phase), sm, evs, N);
+    const evStarted = (state.evts || []).some(e => e.turn === state.turn && e.kind !== 'moment');
     // помощника просили переписать распорядок, а он не прислал — значит, план в силе: до следующей части дня не переспрашиваем
     if (sideAsked.includes('replan') && !day && phase.kind === 'today' && phase.h) {
         state.planPart[`${phase.h.id}#${phase.dayIndex}`] = dayPart(state.clock) || 'morning';
@@ -1151,13 +1188,27 @@ function processReply(N) {
     state.evRoll = false;
     const tgt = evTarget(phase);
     const evChance = evChanceSetting();
-    if (tgt && evChance > 0 && !openEvent(state, tgt.hid) && !offeredEvent(state)
+    // просили начать ивент, а модель не начала (и проверка не нашла) — ещё одна попытка с тем же планом, без нового броска
+    const evRetry = hadEvRoll && !evStarted && hadEvRoll.tries < 1 && tgt && (!hadEvRoll.plan || hadEvRoll.plan.hid === tgt.hid) && !openEvent(state, tgt.hid) && !offeredEvent(state);
+    if (evRetry) {
+        state.evRoll = true;
+        state.evTry = hadEvRoll.tries + 1;
+        console.debug('[Hearthtide] ивент: модель не начала — пробую ещё раз в следующем ответе');
+    } else if (tgt && evChance > 0 && !openEvent(state, tgt.hid) && !offeredEvent(state)
         && state.turn - (state.lastEventEnd ?? -99) >= EVENT_COOLDOWN
         && state.turn - Math.max(-99, ...(state.evts || []).filter(e => e.hid === tgt.hid).map(e => e.turn)) >= EVENT_COOLDOWN) {
         const r = rollFor(text, state.turn);
         state.evRoll = r < evChance;
         console.debug(`[Hearthtide] ивент (${tgt.kind}): бросок ${r} ${state.evRoll ? '<' : '≥'} ${evChance}%`);
     }
+    if (!evRetry) state.evTry = 0;
+    // план ивента: пришёл от помощника к этому ответу — держим, пока бросок в силе; иначе сбрасываем
+    const evPlanRec = recOf(msg, 'ht_evplan', text);
+    const evPlanIn = (sideText && sideAsked.includes('evplan') ? parseEvPlan(sideText) : null) || (evPlanRec ? parseEvPlan(evPlanRec.text) : null);
+    if (state.evRoll && tgt) {
+        if (evPlanIn && langOk(evPlanIn.title)) state.evPlan = { ...evPlanIn, hid: tgt.hid, turn: state.turn };
+        else if (state.evPlan && state.evPlan.hid !== tgt.hid) state.evPlan = null;
+    } else state.evPlan = null;
 
     // ── Приглашения: бросок после ответа — кого из близких позовут (чем ближе день и человек, тем вероятнее) ──
     rollInvite(text, hadInvRoll, conf);
@@ -1448,7 +1499,14 @@ const hoursUntil = (st, at) => (!at || at.now || st.today == null ? null : ((at.
 function acceptInto(st, d) {
     const left = hoursUntil(st, d.at);
     if (left != null && left > 0.75) d.status = 'scheduled';
-    else startDate(d, st.turn);
+    else { startDate(d, st.turn); markStart(d, st); }
+}
+/** Свидание началось — с этой минуты истории считаем, сколько оно идёт и не перескочил ли его таймскип */
+function markStart(d, st = state) {
+    if (!d || !st || st.today == null) return;
+    const at = { day: st.today, clock: st.clock };
+    d.startAt = at;
+    d.seenAt = at;
 }
 /**
  * Главная цель свидания — к чему они должны прийти («Сблизиться», «Помириться»), а не название свидания
@@ -1509,12 +1567,13 @@ function tidyDateUp(up) {
         .replace(/\s*\((?:user|char|both|юзер|чар|оба|вместе|игрок)\)\s*/gi, ' ').replace(/\s{2,}/g, ' ').trim() || null : null);
     const ok = (t) => (t && langOk(t) ? t : null);
     // шаг — задача для {{char}}: «Подарить Анне венок», а не «Ярослав дарит / подарит / подарил»
-    const added = (up.add || []).map(a => ({ t: ok(fix(a.t)), thought: ok(fix(a.thought)) })).filter(a => a.t);
+    // шаг или мысль «прижать к себе, никому не отдавать», «моя» — не берём: свидание про близость, а не про обладание
+    const added = (up.add || []).map(a => ({ t: owning(a.t) ? null : ok(fix(a.t)), thought: owning(a.thought) ? null : ok(fix(a.thought)) })).filter(a => a.t);
     up.add = added.map(a => ({ t: taskForm(a.t, c, u), thought: a.thought ? a.thought.replace(/^[«"“*_]+|[»"”*_]+$/g, '') : null, who: 'char' })).filter(a => a.t);
     const bad = added.filter(a => !taskForm(a.t, c, u)).map(a => a.t);
     if (bad.length) console.info(`[Hearthtide] свидание: шаги не в форме задачи — пропущены, дозапрошу: ${bad.join(' / ')}`);
     for (const x of [...(up.done || []), ...(up.fail || [])]) x.note = ok(fix(x.note));
-    for (const k of ['vibe', 'thought', 'recap', 'best', 'why']) up[k] = ok(fix(up[k]));
+    for (const k of ['vibe', 'thought', 'recap', 'best', 'why']) up[k] = owning(up[k]) && k !== 'why' ? null : ok(fix(up[k]));
     up.moments = (up.moments || []).map(m => ok(fix(m))).filter(Boolean);
     up.gifts = (up.gifts || []).map(g => ({ from: fix(g.from), what: ok(fix(g.what)) })).filter(g => g.what);
     // купленное на месте и съеденное, выпитое, выкуренное — не подарок (модели это путают)
@@ -2531,11 +2590,14 @@ function buildConfirmMessages(ctx, need, msgs) {
     const prev = msgs.slice(0, -1).reverse().find(m => m?.is_user && m.mes);
     const q = [];
     if (need.date) q.push(`DATE: yes or no — in the LAST MESSAGE, does ${charName} actually ask ${userName} on a date or out somewhere together — said out loud to ${userName} (or written to her/him)? Only thinking about it, planning it in their head, or a vague hint — no.`);
+    // день и час — как их сказали вслух («завтра к шести»), а не как было в плане: иначе карточка спорит с историей
+    if (need.date && ctx.state?.today != null) q.push(`WHEN: if DATE is yes — the day and time named for it in these messages, as YYYY-MM-DD HH:MM (today is ${isoOf(ctx.state.today)}${ctx.state.clock != null ? `, now ${String(Math.floor(ctx.state.clock)).padStart(2, '0')}:${String(Math.round((ctx.state.clock % 1) * 60)).padStart(2, '0')}` : ''}; "tomorrow at six" is the next day 18:00); now if it is right now; none if no day or time was named.`);
     if (need.inv.length) q.push(`AGREED: yes or no — if someone invites ${userName} in the LAST MESSAGE: had ${userName}'s own message before it already asked to come or said yes to it? No if ${userName} hasn't answered yet.`);
+    if (need.ev) q.push(`EVENT: yes or no — in the LAST MESSAGE, does this begin (or something very close to it): ${need.ev.hook || need.ev.title}${need.ev.who ? ` — started by ${need.ev.who}` : ''}? Only planned or thought about — no.`);
     if (need.pend) q.push(`REPLY: yes, no or none — ${need.pend.host || 'someone'} invited ${userName} to ${need.pend.label} earlier, and it is waiting for ${userName}'s answer. In ${userName}'s own message (the one before the LAST MESSAGE): does ${userName} accept it or say they will come (yes), turn it down or say they won't come (no), or not answer it (none)? Only ${userName}'s own words count.`);
     if (need.inv.length) q.push(`INVITE: one of the names below, or no — in the LAST MESSAGE, does someone actually invite ${userName} (alone or with ${charName}) to one of these — in person, by word, by a note or through someone: ${need.inv.map(x => `"${x.value}" — ${x.label}`).join('; ')}? Only mentioning it, planning or thinking of inviting — no. If yes, answer with its name exactly as quoted.`);
     return [
-        { role: 'system', content: 'You check one roleplay message for an extension. Answer in English with exactly the lines asked, each starting with its label (DATE:, INVITE:, REPLY:), one per line — no explanations, no other text.' },
+        { role: 'system', content: 'You check one roleplay message for an extension. Answer in English with exactly the lines asked, each starting with its label (DATE:, WHEN:, INVITE:, REPLY:), one per line — no explanations, no other text.' },
         { role: 'user', content: `${prev ? `[${userName}, before it]\n${clean(prev.mes).slice(-800)}\n\n` : ''}[LAST MESSAGE]\n${clean(last?.mes).slice(-3500)}\n\n${q.join('\n')}` },
     ];
 }
@@ -2570,7 +2632,22 @@ function parseConfirm(text, need) {
     // ответ игрока на висящее приглашение — его собственной репликой в ролплее
     const rm = need.pend ? t.match(/REPLY\s*[:=|-]\s*["'«]?\s*(yes|no|none|да|нет)\b/i) : null;
     const reply = rm ? (/^(yes|да)/i.test(rm[1]) ? 'yes' : /^(no|нет)/i.test(rm[1]) ? 'no' : null) : null;
-    return { date, inv, agreed, reply };
+    // когда договорились — день и час из самой истории
+    const wm = need.date ? t.match(/WHEN\s*[:=|-]\s*([^\n]+)/i) : null;
+    const when = wm && date !== false ? parseAt(wm[1]) : null;
+    const em = need.ev ? t.match(/EVENT\s*[:=|-]\s*["'«]?\s*(yes|no|да|нет)\b/i) : null;
+    const ev = em ? /^(yes|да)/i.test(em[1]) : null;
+    return { date, inv, agreed, reply, when, ev };
+}
+/** План ивента от помощника: <!-- HT-EVPLAN kind=… | title=… | who=… | hook=… --> */
+function parseEvPlan(text) {
+    const m = String(text || '').match(/<!--\s*HT-EVPLAN([\s\S]*?)-->/i);
+    if (!m) return null;
+    const f = {};
+    for (const part of m[1].split('|')) { const i = part.indexOf('='); if (i > 0) f[part.slice(0, i).trim().toLowerCase()] = part.slice(i + 1).trim(); }
+    const bad = (v) => !v || /^…|^\.\.\.|^<|^(none|нет)$/i.test(v) || /event\|party/i.test(v);
+    if (bad(f.title)) return null;
+    return { kind: /^part/i.test(f.kind || '') ? 'party' : 'event', title: f.title.slice(0, 80), who: bad(f.who) ? null : f.who.slice(0, 60), hook: bad(f.hook) ? null : f.hook.slice(0, 220) };
 }
 
 // ─── Свидание: отдельный короткий запрос помощника после каждого ответа ───
@@ -2663,11 +2740,46 @@ function cancelSide() {
     if (side) { try { side.ctl.abort(); } catch (e) { /* пусто */ } side = null; scheduleRenderAll(); }
 }
 
+/**
+ * Выпал шанс ивента, а плана нет (большой запрос в этот раз не шёл или шанс выпал после него) — коротко спросить
+ * помощника, что именно случится. План лежит на сообщении: пересчёт по снимку его не теряет.
+ */
+let evPlanSide = null;
+async function runEvPlanSide(N) {
+    if (!apiOn() || !isEnabled() || !state?.evRoll || state.evPlan || N !== lastProcessedMsg()) return;
+    const msg = chat[N];
+    if (!msg || msg.is_user || msg.is_system || recFresh(msg, 'ht_evplan', msg.mes) || evPlanSide?.N === N) return;
+    const ctx = ctxFor();
+    if (!ctx.evTarget) return;
+    const me = { N, swipe: swOf(msg), ctl: new AbortController() };
+    evPlanSide = me;
+    try {
+        const src = await gatherSources(N, 8, Math.max(-1, N - 3));
+        if (evPlanSide !== me) return;
+        const text = await sendSide(apiProfile(), buildSideMessages(ctx, new Set(['evplan']), src), me.ctl.signal, 900);
+        if (evPlanSide !== me || !sameReply(N, me.swipe)) return;
+        console.info(`[Hearthtide] план ивента — помощник:\n${text}`);
+        const m = chat[N];
+        m.extra = m.extra || {};
+        m.extra.ht_evplan = { [coreHash(m.mes)]: { text, swipe: me.swipe, len: coreText(m.mes).length } };
+        processReply(N);
+        saveState();
+        injectPrompts();
+    } catch (e) {
+        if (!me.ctl.signal.aborted) console.warn('[Hearthtide] план ивента не пришёл — модель получит общую просьбу:', reasonOf(e));
+    } finally {
+        if (evPlanSide === me) evPlanSide = null;
+        scheduleRenderAll();
+    }
+}
+
 /** Решить, нужен ли запрос после ответа N, и отправить */
 function maybeSide(N, force = false, extra = []) {
     if (isOpening(N)) return;
     runConfirmSide(N);
     runDateSide(N);
+    // большой запрос сейчас не пойдёт, а шанс ивента выпал — план отдельно (если пойдёт — план придёт с ним или после)
+    if (state?.evRoll && !state.evPlan && !sideDue(state, phaseOf(state), sideNeeds(state, phaseOf(state)))) runEvPlanSide(N);
     if (!apiOn() || !state || generating) return;
     const msg = chat[N];
     if (!msg || msg.is_user || msg.is_system || N !== lastProcessedMsg()) return;
@@ -2776,6 +2888,7 @@ async function runSide(N, needs) {
         msg.extra.ht_side = map;
         side = null;
         processReply(N);                // снимок перед N → ответ + блоки отдельного запроса
+        runEvPlanSide(N);               // шанс ивента мог выпасть только сейчас (свидание завёл сам запрос)
     } catch (e) {
         if (ctl.signal.aborted || side !== me) return;
         sideFailTurn = state?.turn ?? 0;
@@ -2973,7 +3086,8 @@ function renderBlock(id) {
     const loading = live && sideLoading();
     block.classList.toggle('ht-loading', loading);
     const plannedMark = view.planned ? `<i class="fa-solid ${view.planned.friendly ? 'fa-handshake ht-head-friend' : 'fa-heart'} ht-head-date" title="${esc(`${view.planned.friendly ? L().outingPlanned : L().datePlanned}: ${view.planned.title}${view.planned.when ? ` · ${view.planned.when}` : ''}`)}"></i>` : '';
-    block.innerHTML = headHtml(view, open, (live ? sideMarkHtml() : '') + plannedMark, loading) + (open ? bodyHtml(view, live, ui.tab.get(id) || 'now') : '');
+    const dateNow = live && state?.date?.status === 'active' ? state.date : null;
+    block.innerHTML = headHtml(view, open, (live ? sideMarkHtml() : '') + plannedMark, loading, dateNow) + (open ? bodyHtml(view, live, ui.tab.get(id) || 'now') : '');
     if (cards) {
         cards.dataset.mesid = String(id);
         cards.classList.toggle('ht-loading', loading);
@@ -3008,9 +3122,25 @@ function ring(view) {
 
 function daysWord(n) { return L().days(n, plural); }
 
-function headHtml(view, open, mark = '', loading = false) {
+function headHtml(view, open, mark = '', loading = false, dateNow = null) {
     let title, sub = '';
     const h = view.h;
+    if (dateNow) {
+        // идёт свидание или встреча — это и есть «сейчас»; праздник календаря — второй строкой
+        const fr = isFriendlyDate(dateNow);
+        title = dateNow.title;
+        sub = [fr ? L().outingWord : L().dateWord, view.kind === 'today' && h ? L().today(h.name) : h && view.daysTo != null ? `${h.name} · ${view.daysTo === 1 ? L().tomorrow : L().inDays(daysWord(view.daysTo))}` : ''].filter(Boolean).join(' · ');
+        if (loading) sub = L().sideBusy;
+        return `<div class="ht-head ht-head-datenow${fr ? ' ht-friendly' : ''}" role="button" tabindex="0" data-act="toggle" aria-expanded="${open}">
+        ${loading ? `<span class="ht-ring ht-ring-wait"><i class="fa-solid fa-feather-pointed"></i></span>` : `<span class="ht-ring ht-ring-today ht-ring-date"><span class="ht-ring-center"><i class="fa-solid ${fr ? 'fa-handshake' : 'fa-heart'}"></i></span></span>`}
+        <span class="ht-head-text">
+            <span class="ht-title"><i class="fa-solid ${fr ? 'fa-handshake' : 'fa-heart'}"></i>${esc(title)}</span>
+            ${sub ? `<span class="ht-sub">${esc(sub)}</span>` : ''}
+        </span>
+        ${mark}
+        <i class="fa-solid fa-chevron-down ht-chev"></i>
+    </div>`;
+    }
     if (view.kind === 'today' && h) {
         title = L().today(h.name);
         // название дня, совпадающее с названием праздника, не повторяем
@@ -3823,7 +3953,7 @@ function trackBody(x, live, max) {
     const gifts = [x.charGift?.text && `${getCharName()}: ${x.charGift.text}${x.charGift.done ? ` · ${L().giftGiven}` : ''}`,
         x.userGift?.text && `${getUserName()}: ${x.userGift.text}${x.userGift.done ? ` · ${L().giftGiven}` : ''}`].filter(Boolean);
     return `${x.invited ? `<span class="ht-also-tag"><i class="fa-solid fa-envelope-open-text"></i>${esc(L().alsoInvited)}${x.host ? ` · ${esc(x.host)}` : ''}</span>` : ''}
-        ${readyHtml(x.ready, live, max) || (x.daysTo <= 0 ? '' : `<p class="ht-mute">${esc(L().readyNone)}</p>`)}
+        ${readyHtml(x.ready, live, max)}
         ${gifts.map(t => `<em class="ht-chip"><i class="fa-solid fa-gift"></i>${esc(t)}</em>`).join('')}`;
 }
 

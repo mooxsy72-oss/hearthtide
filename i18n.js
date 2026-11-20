@@ -12,7 +12,7 @@ function genitive(name) {
     if (n === 'Любовь') return 'Любови';
     if (/ия$/.test(n)) return n.slice(0, -1) + 'и';                 // Мария → Марии
     if (/[гкхжшщч]а$/.test(n)) return n.slice(0, -1) + 'и';         // Ольга → Ольги
-    if (/а$/.test(n)) return n.slice(0, -1) + 'ы';                  // Нина → Нины, Никита → Никиты
+    if (/а$/.test(n)) return n.slice(0, -1) + 'ы';                  // Вера → Веры, Никита → Никиты
     if (/я$/.test(n)) return n.slice(0, -1) + 'и';                  // Таисья → Таисьи
     if (/[йь]$/.test(n)) return n.slice(0, -1) + 'я';               // Андрей → Андрея, Игорь → Игоря
     if (/[бвгджзклмнпрстфхцчшщ]$/.test(n)) return n + 'а';          // Ярослав → Ярослава
@@ -67,13 +67,13 @@ const RU = {
     badDate: 'Не поняла дату — нужно ГГГГ-ММ-ДД',
     saved: 'Сохранено',
     groups: { relative: 'Родня', friend: 'Друзья', acquaintance: 'Знакомые', other: 'Прочие' },
-    care: { high: 'важный праздник', normal: 'обычный праздник', low: 'проходной праздник' },
+    care: { high: 'очень важно', normal: 'важно в меру', low: 'не особо важно' },
     gifts: 'Подарки',
     giftUndecided: 'пока не решено',
     giftsFor: (n) => `Подарок для ${genitive(n)}`,
     giftFrom: (n) => `От ${genitive(n)}`,
     giftFromBoth: (a, b) => `От ${genitive(a)} и ${genitive(b)} — общий`,
-    giftJoint: 'общий', giftOwn: 'каждый свой',
+    giftJoint: 'сделать общим', giftOwn: 'каждому свой',
     giftJointTip: 'Сделать подарок общим', giftOwnTip: 'Пусть каждый дарит свой',
     userGiftNone: 'решаете вы — впишите, когда придумаете',
     userGiftEdit: 'Вписать свой подарок', userGiftPh: 'что подарите',
@@ -185,7 +185,7 @@ const RU = {
     diag: { notag: 'модель не ставит скрытый тег — см. консоль и пресет', nocal: 'модель пропустила календарь — спрошу ещё раз', lang: 'календарь пришёл не на том языке — попросила переписать' },
     yearKept: 'отметили', yearMissed: 'прошёл мимо',
     yearEmpty: 'В этом году праздники ещё не проходили.',
-    offerCause: 'Новое событие',
+    offerCause: 'Из истории',
     offerHol: 'Намечается',
     offerToday: 'сегодня',
     offerMore: (n) => `ещё ${n}`,
@@ -234,7 +234,7 @@ const EN = {
     badDate: "Couldn't read the date — use YYYY-MM-DD",
     saved: 'Saved',
     groups: { relative: 'Family', friend: 'Friends', acquaintance: 'Acquaintances', other: 'Others' },
-    care: { high: 'matters a lot', normal: 'an ordinary holiday', low: 'a passing holiday' },
+    care: { high: 'matters a lot', normal: 'matters somewhat', low: 'means little' },
     gifts: 'Gifts',
     giftUndecided: 'not decided yet',
     giftsFor: (n) => `Gift for ${n}`,
